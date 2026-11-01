@@ -1,0 +1,21 @@
+Aircraft 3D models used in Turbo Flight Sim 0.1
+
+These models are used under Creative Commons Attribution 4.0 (CC BY 4.0).
+https://creativecommons.org/licenses/by/4.0/
+
+From amvlab / aircraft-models (https://github.com/amvlab/aircraft-models):
+- A320_nologo.glb → a320.glb
+- A350_nologo.glb → a350.glb
+- A380_nologo.glb → a380.glb
+- B737_nologo.glb → b737.glb
+- B787_nologo.glb → b787.glb
+- EVTOL_nologo.glb → evtol.glb
+- drone_nologo.glb → drone.glb
+
+Boeing 747 is an original high-detail procedural mesh in Turbo Flight Sim 0.1
+(upper-deck hump, four high-bypass turbofans, wing fairings, dual window belts).
+It is intentionally not the A380 GLB.
+
+Models were scaled and reoriented for this game. Interactive opening parts
+(doors, gear, flaps, and so on) and Demi Airline paint are original
+Turbo Flight Sim 0.1 work.

@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <title>Turbo Flight Sim 0.1</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <canvas id="view"></canvas>
+  <div id="boot">Opening the hangar…</div>
+
+  <div id="name-gate" hidden>
+    <form id="name-form" class="name-card">
+      <p class="eyebrow">Multiplayer hangar</p>
+      <h1>What’s your name?</h1>
+      <p>We’ll name your airport after you. Friends on the same Wi‑Fi can join this game.</p>
+      <label class="name-label">Pilot name
+        <input id="player-name" type="text" maxlength="16" minlength="2" autocomplete="nickname" placeholder="Demi" required />
+      </label>
+      <button id="name-go" type="submit">Enter hangar</button>
+      <p id="join-hint" class="menu-hint"></p>
+    </form>
+  </div>
+
+  <aside id="menu" hidden>
+    <header class="mast">
+      <p class="eyebrow" id="hangar-eyebrow">Hangar 0.1</p>
+      <h1>Turbo Flight Sim 0.1</h1>
+      <p>Seven airliners plus cars and roads. Your own airport. Fly or drive with friends on Wi‑Fi.</p>
+      <p id="airport-banner" class="airport-banner"></p>
+      <div id="players-online" class="players-online" aria-live="polite"></div>
+      <p id="traffic-hangar" class="traffic-hangar" aria-live="polite"></p>
+    </header>
+    <div id="menu-list"></div>
+    <footer class="dock">
+      <p class="role" id="plane-role"></p>
+      <h2 id="plane-name"></h2>
+      <p class="blurb" id="plane-blurb"></p>
+      <p class="parts" id="plane-parts"></p>
+      <div class="dock-actions">
+        <button id="settings-open" type="button" class="settings-link">Settings</button>
+        <button id="fly-btn" type="button">Fly</button>
+      </div>
+      <p class="menu-hint">Pick a plane or car, then Fly / Drive. Drag to look. Pinch to zoom.</p>
+    </footer>
+  </aside>
+
+  <aside id="settings-page" hidden>
+    <header class="settings-head">
+      <p class="eyebrow">Config</p>
+      <h1>Settings</h1>
+      <p>Liveries, weather, and airport name — kept off the hangar.</p>
+      <button id="settings-close" type="button">Back to hangar</button>
+    </header>
+    <div class="settings-body">
+      <section class="settings-block" id="airline-paint">
+        <h2 class="airline-title">Liveries</h2>
+        <div id="livery-grid"></div>
+        <div class="airline-colors">
+          <label>Primary <input id="airline-primary" type="color" value="#0b3d91" /></label>
+          <label>Wave <input id="airline-secondary" type="color" value="#7ec8e3" /></label>
+          <label>Body <input id="airline-fuselage" type="color" value="#f7f9fc" /></label>
+        </div>
+      </section>
+      <section class="settings-block" id="hangar-wx" aria-label="Hangar weather">
+        <h2 class="airline-title">Weather</h2>
+        <p id="hangar-wx-status" class="wx-hangar-status">Clear — tap a sky, or Live for real weather</p>
+        <div id="hangar-wx-grid"></div>
+      </section>
+      <section class="settings-block" id="hangar-rename">
+        <h2 class="airline-title">Airport name</h2>
+        <div class="hangar-rename">
+          <label>Pilot / airport
+            <input id="rename-input" type="text" maxlength="16" />
+          </label>
+          <button id="rename-btn" type="button">Update airport</button>
+        </div>
+      </section>
+    </div>
+  </aside>
+
+  <div id="wx-panel" aria-label="Flight weather" hidden>
+    <div class="wx-title">Weather</div>
+    <div id="wx-status">Clear</div>
+    <div id="wx-grid"></div>
+  </div>
+
+  <div id="hud" hidden>
+    <div class="topbar">
+      <strong id="hud-name">Plane</strong>
+      <span id="hud-region">North America</span>
+      <span id="hud-cam">Cam 1/16</span>
+      <span id="hud-head">000</span>
+      <span id="hud-rings">Rings 0/5</span>
+      <span id="hud-wx">WX Clear</span>
+      <span id="hud-traffic"></span>
+    </div>
+    <div class="readouts" aria-hidden="false">
+      <div class="readout"><span>SPD</span><b id="hud-speed">0</b></div>
+      <div class="readout"><span>ALT</span><b id="hud-alt">0</b></div>
+      <div class="readout"><span>VS</span><b id="hud-vsi">0</b></div>
+      <div class="readout"><span>BANK</span><b id="hud-bank">0</b></div>
+      <div class="readout"><span>AoA</span><b id="hud-aoa">0</b></div>
+    </div>
+    <div id="adi" aria-hidden="true">
+      <div id="adi-face">
+        <div class="sky"></div>
+        <div class="ground"></div>
+        <div class="h-line"></div>
+      </div>
+      <div class="adi-fixed"></div>
+    </div>
+    <div id="coach">Slide the throttle up. Push the stick up, or the up arrow, to raise the nose.</div>
+    <div id="cautions" aria-live="assertive">
+      <div class="caution" data-warn="stall">STALL</div>
+      <div class="caution" data-warn="bank">BANK ANGLE</div>
+      <div class="caution" data-warn="overspeed">OVERSPEED</div>
+      <div class="caution shear" data-warn="windshear">WINDSHEAR</div>
+      <div class="caution" data-warn="terrain">TERRAIN</div>
+      <div class="caution" data-warn="pullup">PULL UP</div>
+      <div class="caution amber" data-warn="gear">GEAR</div>
+      <div class="caution amber" data-warn="door">DOOR</div>
+      <div class="caution amber" data-warn="flaps">FLAPS</div>
+    </div>
+    <div id="parts-panel"></div>
+    <div id="ap-panel" aria-label="Autopilot">
+      <div class="ap-title">Autopilot <kbd>B</kbd></div>
+      <button type="button" id="ap-master" class="ap-btn">AP OFF</button>
+      <div class="ap-modes">
+        <button type="button" id="ap-hdg" class="ap-btn" data-mode="hdg">HDG</button>
+        <button type="button" id="ap-alt" class="ap-btn" data-mode="alt">ALT</button>
+        <button type="button" id="ap-spd" class="ap-btn" data-mode="spd">SPD</button>
+      </div>
+      <div class="ap-targets">
+        <span id="ap-hdg-read">HDG —</span>
+        <span id="ap-alt-read">ALT —</span>
+        <span id="ap-spd-read">SPD —</span>
+      </div>
+      <div class="ap-trim">
+        <button type="button" data-ap-adj="hdg" data-dir="-1">HDG −</button>
+        <button type="button" data-ap-adj="hdg" data-dir="1">HDG +</button>
+        <button type="button" data-ap-adj="alt" data-dir="-1">ALT −</button>
+        <button type="button" data-ap-adj="alt" data-dir="1">ALT +</button>
+      </div>
+    </div>
+    <div id="fly-actions" aria-label="Flight actions">
+      <button type="button" data-fly="hangar" title="Back to hangar">Hangar</button>
+      <button type="button" data-fly="cam" id="fly-cam" title="Cycle camera">Cam</button>
+      <button type="button" data-fly="cockpit" title="Cockpit view">Cockpit</button>
+      <button type="button" data-fly="orbit" title="Orbit view">Orbit</button>
+      <button type="button" data-fly="jump" id="fly-jump" title="Double-tap to jump out or board">Jump</button>
+      <button type="button" data-fly="reset" title="Reset to runway">Reset</button>
+      <button type="button" data-fly="mute" id="mute-btn" title="Toggle sound">Sound on</button>
+      <button type="button" data-hold="run" data-value="1" id="fly-run" title="Hold to run" hidden>Run</button>
+    </div>
+    <div id="controls">
+      <div id="joy" aria-label="Flight stick">
+        <div id="joy-knob"></div>
+      </div>
+      <div id="aux-pad">
+        <button type="button" data-hold="yaw" data-value="-1">Nose left</button>
+        <button type="button" data-hold="brake" data-value="1">Brake</button>
+        <button type="button" data-hold="yaw" data-value="1">Nose right</button>
+      </div>
+    </div>
+    <div id="hints"></div>
+    <div id="throttle-panel">
+      <div id="throttle-slider" aria-label="Throttle">
+        <div id="throttle-fill"></div>
+        <div id="throttle-knob"></div>
+      </div>
+      <span>Throttle</span>
+    </div>
+  </div>
+
+  <div id="toast" role="status"></div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./node_modules/three/build/three.module.js"
+    }
+  }
+  </script>
+  <script type="module" src="js/main.js?v=100"></script>
+</body>
+</html>

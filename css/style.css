@@ -1,0 +1,1128 @@
+:root {
+  color-scheme: dark;
+  --navy: #102033;
+  --ink: #1b2430;
+  --paper: #efe7d6;
+  --paper-2: #f7f1e4;
+  --line: rgba(16, 32, 51, 0.14);
+  --amber: #ef7d00;
+  --amber-2: #ffb703;
+  --good: #2a9d8f;
+  --hud: rgba(8, 14, 22, 0.82);
+  --cream: #f6f1e4;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #071018;
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  color: var(--ink);
+  overscroll-behavior: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+button, input { font: inherit; }
+button { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+
+#view {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+}
+
+#boot {
+  position: fixed;
+  inset: 0;
+  z-index: 6;
+  display: grid;
+  place-items: center;
+  background: #102033;
+  color: var(--cream);
+  letter-spacing: 0.04em;
+}
+
+[hidden] { display: none !important; }
+
+#name-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 7;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at 20% 20%, rgba(239, 125, 0, 0.25), transparent 40%),
+    radial-gradient(circle at 80% 70%, rgba(42, 157, 143, 0.2), transparent 45%),
+    #102033;
+}
+
+.name-card {
+  width: min(420px, 100%);
+  padding: 28px 24px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(239, 231, 214, 0.98), rgba(247, 241, 228, 0.96));
+  color: var(--ink);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+}
+
+.name-card h1 {
+  margin: 0 0 8px;
+  font-size: clamp(28px, 5vw, 36px);
+  line-height: 1.1;
+}
+
+.name-card p {
+  margin: 0 0 16px;
+  line-height: 1.45;
+  color: rgba(27, 36, 48, 0.78);
+}
+
+.name-label {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #0b3d91;
+  margin-bottom: 14px;
+}
+
+#player-name, #rename-input {
+  width: 100%;
+  min-height: 48px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(11, 61, 145, 0.22);
+  background: #fff;
+  color: var(--ink);
+}
+
+#name-go {
+  width: 100%;
+  min-height: 52px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--amber);
+  color: #1b1204;
+  font-weight: 800;
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.airport-banner {
+  margin: 10px 0 0;
+  font-weight: 700;
+  color: #ffb703;
+}
+
+.players-online {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.players-online .pill {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  font-size: 12px;
+}
+
+.traffic-hangar {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.35;
+  color: rgba(246, 241, 228, 0.78);
+}
+
+#hud-traffic {
+  color: #9be7ff;
+  font-size: 12px;
+  max-width: 46vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.players-online .pill.you {
+  background: rgba(42, 157, 143, 0.55);
+}
+
+.hangar-rename {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: end;
+  margin: 0 0 10px;
+}
+
+.hangar-rename label {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #0b3d91;
+}
+
+#rename-btn {
+  min-height: 44px;
+  border: 0;
+  border-radius: 10px;
+  padding: 0 12px;
+  background: rgba(11, 61, 145, 0.12);
+  color: var(--navy);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+#menu {
+  touch-action: pan-y;
+  position: fixed;
+  z-index: 3;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: min(420px, 100vw);
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, rgba(239, 231, 214, 0.96), rgba(247, 241, 228, 0.94));
+  border-right: 1px solid rgba(255, 255, 255, 0.4);
+  box-shadow: 12px 0 40px rgba(0, 0, 0, 0.18);
+}
+
+.mast {
+  padding: 22px 22px 16px;
+  background: var(--navy);
+  color: var(--cream);
+}
+
+.eyebrow {
+  margin: 0 0 6px;
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--amber-2);
+}
+
+.mast h1 {
+  margin: 0;
+  font-size: 34px;
+  line-height: 0.95;
+  letter-spacing: -0.03em;
+}
+
+.mast p { margin: 10px 0 0; color: rgba(246, 241, 228, 0.82); }
+
+#menu-list {
+  flex: 1;
+  overflow: auto;
+  padding: 12px;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+}
+
+#menu-list h3 {
+  margin: 14px 8px 8px;
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #5c6b7c;
+}
+
+.plane-btn {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 46px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  text-align: left;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.55);
+  border-radius: 12px;
+  padding: 8px;
+  margin-bottom: 6px;
+  cursor: pointer;
+  color: var(--ink);
+  min-height: 60px;
+}
+
+.plane-btn strong { display: block; font-size: 15px; }
+.plane-btn small { color: #5c6b7c; }
+.plane-btn .speed { font-variant-numeric: tabular-nums; color: #5c6b7c; font-size: 12px; }
+
+.plane-btn.active {
+  background: white;
+  border-color: var(--amber);
+  box-shadow: 0 6px 16px rgba(239, 125, 0, 0.15);
+}
+
+.swatch {
+  width: 46px;
+  height: 46px;
+  border-radius: 10px;
+}
+
+.dock {
+  padding: 14px 16px max(16px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.45);
+}
+
+.dock h2 { margin: 0 0 4px; font-size: 26px; }
+.role { margin: 0; color: #5c6b7c; font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; }
+.blurb { margin: 8px 0; }
+.parts { margin: 0 0 12px; color: #334155; font-size: 14px; }
+
+.dock-actions {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: stretch;
+  margin-bottom: 8px;
+}
+
+.settings-link {
+  min-height: 52px;
+  padding: 0 16px;
+  border: 1px solid rgba(11, 61, 145, 0.2);
+  border-radius: 14px;
+  background: rgba(11, 61, 145, 0.08);
+  color: var(--navy);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+#settings-page {
+  touch-action: pan-y;
+  position: fixed;
+  z-index: 4;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: min(420px, 100vw);
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, rgba(239, 231, 214, 0.98), rgba(247, 241, 228, 0.96));
+  border-right: 1px solid rgba(255, 255, 255, 0.4);
+  box-shadow: 12px 0 40px rgba(0, 0, 0, 0.22);
+}
+
+.settings-head {
+  padding: 22px 22px 16px;
+  background: var(--navy);
+  color: var(--cream);
+}
+
+.settings-head h1 {
+  margin: 0 0 8px;
+  font-size: clamp(28px, 5vw, 34px);
+}
+
+.settings-head p {
+  margin: 0 0 14px;
+  color: rgba(246, 241, 228, 0.78);
+  line-height: 1.4;
+}
+
+#settings-close {
+  min-height: 44px;
+  border: 0;
+  border-radius: 12px;
+  padding: 0 14px;
+  background: rgba(255, 255, 255, 0.14);
+  color: var(--cream);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.settings-body {
+  flex: 1;
+  overflow: auto;
+  padding: 14px 16px max(20px, env(safe-area-inset-bottom));
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.settings-block {
+  margin: 0;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(11, 61, 145, 0.08);
+  border: 1px solid rgba(11, 61, 145, 0.18);
+}
+
+#airline-paint {
+  /* kept as settings-block */
+}
+
+.airline-title {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #0b3d91;
+}
+
+#livery-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 10px;
+  max-height: 160px;
+  overflow: auto;
+}
+
+.livery-btn {
+  border: 1px solid rgba(11, 61, 145, 0.16);
+  border-radius: 10px;
+  min-height: 40px;
+  padding: 6px 8px 6px 36px;
+  cursor: pointer;
+  position: relative;
+  text-align: left;
+  font-weight: 700;
+  font-size: 12px;
+  color: #0f172a;
+  background: #fff;
+}
+
+.livery-btn .swatch-dot {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+.livery-btn.on {
+  border-color: #0b3d91;
+  box-shadow: 0 0 0 2px rgba(11, 61, 145, 0.25);
+  background: #eef5ff;
+}
+
+.airline-colors {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.airline-colors label {
+  display: grid;
+  gap: 4px;
+  font-size: 11px;
+  color: #5c6b7c;
+}
+
+.airline-colors input[type="color"] {
+  width: 100%;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0;
+  background: white;
+  cursor: pointer;
+}
+
+#fly-btn, .hud-btn, #parts-panel button, #aux-pad button, #fly-actions button, #mute-btn, .ap-btn, .ap-trim button {
+  border: 0;
+  cursor: pointer;
+}
+
+#fly-btn {
+  width: 100%;
+  background: var(--amber);
+  color: #1b1204;
+  font-weight: 700;
+  font-size: 18px;
+  border-radius: 12px;
+  padding: 14px 16px;
+  min-height: 52px;
+}
+
+#fly-btn:hover { background: #ff8f1f; }
+
+.menu-hint {
+  margin: 8px 0 0;
+  color: #5c6b7c;
+  font-size: 12px;
+}
+
+#hud {
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  color: var(--cream);
+}
+
+/* Touch controls only — displays never steal taps. */
+#hud button, #joy, #throttle-slider, #parts-panel, #ap-panel, #aux-pad, #fly-actions, #hud-cam {
+  pointer-events: auto;
+}
+
+.topbar, .readout, #parts-panel, #ap-panel, #wx-panel, #hints, #throttle-panel, #joy, #aux-pad, #adi, #fly-actions {
+  background: var(--hud);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  backdrop-filter: blur(8px);
+}
+
+.topbar {
+  position: absolute;
+  top: max(10px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  align-items: baseline;
+  padding: 8px 12px;
+  max-width: min(720px, calc(100vw - 24px));
+  justify-content: center;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.topbar strong { font-size: 16px; }
+#hud-head, #hud-rings, #hud-cam, #hud-region, #hud-wx { color: var(--amber-2); font-variant-numeric: tabular-nums; }
+#hud-cam, #hud-region, #hud-wx { opacity: 0.92; font-size: 12px; }
+#hud-cam {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: rgba(255, 183, 3, 0.35);
+  text-underline-offset: 3px;
+}
+
+/* Compact instrument strip — top left, clear of stick/throttle. */
+.readouts {
+  position: absolute;
+  top: max(52px, calc(env(safe-area-inset-top) + 44px));
+  left: max(10px, env(safe-area-inset-left));
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: min(420px, calc(100vw - 200px));
+  pointer-events: none;
+  z-index: 1;
+}
+
+.readout {
+  min-width: 0;
+  padding: 4px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.readout span {
+  display: block;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: rgba(246, 241, 228, 0.62);
+}
+
+.readout b {
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+#adi {
+  position: absolute;
+  left: max(10px, env(safe-area-inset-left));
+  top: max(108px, calc(env(safe-area-inset-top) + 96px));
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  overflow: hidden;
+  padding: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+#adi-face {
+  position: absolute;
+  inset: -40px;
+  transition: none;
+}
+
+#adi .sky { height: 50%; background: #3c92d6; }
+#adi .ground { height: 50%; background: #8a5a32; }
+#adi .h-line {
+  position: absolute;
+  left: 10%;
+  right: 10%;
+  top: 50%;
+  height: 2px;
+  background: var(--amber-2);
+}
+.adi-fixed {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 3px rgba(255, 255, 255, 0.35);
+  background:
+    linear-gradient(#f6f1e4, #f6f1e4) center/28px 2px no-repeat;
+}
+
+#coach {
+  position: absolute;
+  top: max(52px, calc(env(safe-area-inset-top) + 42px));
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: min(480px, calc(100vw - 40px));
+  text-align: center;
+  background: rgba(239, 125, 0, 0.92);
+  color: #1b1204;
+  font-weight: 700;
+  padding: 8px 12px;
+  border-radius: 999px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+#cautions {
+  position: absolute;
+  top: 72px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  max-width: min(720px, calc(100vw - 36px));
+  pointer-events: none;
+}
+
+.caution {
+  display: none;
+  min-width: 118px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  text-align: center;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  font-size: 13px;
+  color: #fff7f0;
+  background: #c1121f;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.25), 0 8px 20px rgba(0, 0, 0, 0.35);
+  animation: caution-flash 0.45s steps(2, end) infinite;
+}
+
+.caution.amber {
+  background: #ef7d00;
+  color: #1b1204;
+  animation-duration: 0.7s;
+}
+
+.caution.shear {
+  background: #6a0dad;
+  box-shadow: 0 0 0 2px rgba(255, 210, 255, 0.45), 0 8px 20px rgba(0, 0, 0, 0.35);
+  animation-duration: 0.32s;
+}
+
+.caution.on { display: block; }
+
+#readout-warn {
+  color: #ff6b6b;
+}
+
+@keyframes caution-flash {
+  50% { filter: brightness(1.35); opacity: 0.72; }
+}
+
+#parts-panel {
+  position: absolute;
+  top: max(10px, env(safe-area-inset-top));
+  right: max(10px, env(safe-area-inset-right));
+  width: min(168px, 36vw);
+  max-height: min(42vh, 320px);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+  z-index: 2;
+}
+
+#parts-panel button {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--cream);
+  border-radius: 10px;
+  padding: 10px 12px;
+  min-height: 44px;
+  text-align: left;
+}
+
+#parts-panel button.on {
+  background: rgba(42, 157, 143, 0.35);
+}
+
+#ap-panel {
+  position: absolute;
+  top: max(10px, env(safe-area-inset-top));
+  right: max(186px, calc(env(safe-area-inset-right) + 178px));
+  width: min(168px, 34vw);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  pointer-events: auto;
+  z-index: 2;
+  max-height: min(42vh, 300px);
+  overflow: auto;
+}
+
+.ap-title {
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(246, 241, 228, 0.7);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.ap-title kbd {
+  font-family: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 6px;
+  padding: 1px 6px;
+  color: var(--amber-2);
+}
+
+.ap-modes, .ap-trim {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.ap-modes { grid-template-columns: repeat(3, 1fr); }
+
+.ap-btn, .ap-trim button {
+  border: 0;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--cream);
+  border-radius: 10px;
+  min-height: 40px;
+  font-weight: 700;
+  pointer-events: auto;
+  touch-action: manipulation;
+}
+
+#ap-master.on, .ap-btn.on {
+  background: rgba(42, 157, 143, 0.55);
+  color: #f6f1e4;
+  box-shadow: 0 0 0 1px rgba(53, 255, 210, 0.45);
+}
+
+.ap-targets {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--amber-2);
+  padding: 2px 4px;
+}
+
+
+#parts-panel kbd, #hints kbd {
+  font-family: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 6px;
+  padding: 1px 6px;
+  color: var(--amber-2);
+}
+
+#controls {
+  position: absolute;
+  left: max(12px, env(safe-area-inset-left));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  pointer-events: none;
+  z-index: 3;
+}
+
+#joy {
+  width: 148px;
+  height: 148px;
+  border-radius: 50%;
+  position: relative;
+  touch-action: none;
+  flex: none;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.28)) center/2px 46% no-repeat,
+    linear-gradient(rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.28)) center/46% 2px no-repeat,
+    radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.08), rgba(8, 14, 22, 0.55) 68%);
+}
+
+#joy-knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 64px;
+  height: 64px;
+  margin: -32px 0 0 -32px;
+  border-radius: 50%;
+  background: var(--amber);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
+}
+
+#aux-pad {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  pointer-events: none;
+}
+
+#aux-pad button, #fly-actions button, #mute-btn {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--cream);
+  border-radius: 12px;
+  min-height: 52px;
+  min-width: 108px;
+  padding: 8px 12px;
+  font-weight: 700;
+  pointer-events: auto;
+  touch-action: manipulation;
+}
+
+#aux-pad button {
+  touch-action: none;
+}
+
+#aux-pad button.held, #fly-actions button.held, #fly-actions button.armed,
+#parts-panel button:active, #aux-pad button:active, #fly-actions button:active {
+  background: rgba(239, 125, 0, 0.7);
+  color: #1b1204;
+}
+
+/* Center action dock — clear of stick (left) and throttle (right). */
+#fly-actions {
+  position: absolute;
+  left: 50%;
+  bottom: max(12px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px;
+  max-width: min(420px, calc(100vw - 220px));
+  z-index: 4;
+  pointer-events: auto;
+}
+
+#fly-actions button {
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 10px;
+  font-size: 13px;
+  flex: 1 1 auto;
+}
+
+#fly-actions button[data-fly="jump"] {
+  background: rgba(42, 157, 143, 0.35);
+}
+
+#fly-actions button[data-fly="hangar"] {
+  background: rgba(230, 57, 70, 0.28);
+}
+
+#fly-actions #fly-run {
+  background: rgba(255, 183, 3, 0.28);
+}
+
+#throttle-panel {
+  position: absolute;
+  right: max(12px, env(safe-area-inset-right));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  width: 84px;
+  padding: 10px 10px 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+  z-index: 3;
+}
+
+#throttle-panel span {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(246, 241, 228, 0.8);
+}
+
+#throttle-slider {
+  width: 58px;
+  height: 188px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  position: relative;
+  touch-action: none;
+  overflow: hidden;
+}
+
+#throttle-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 0%;
+  background: linear-gradient(0deg, #2a9d8f, #ffb703 70%, #e63946);
+}
+
+#throttle-knob {
+  position: absolute;
+  left: 50%;
+  width: 46px;
+  height: 32px;
+  margin-left: -23px;
+  bottom: 0;
+  border-radius: 10px;
+  background: var(--cream);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.35);
+}
+
+#hints {
+  position: absolute;
+  left: 50%;
+  bottom: max(68px, calc(env(safe-area-inset-bottom) + 56px));
+  transform: translateX(-50%);
+  width: min(460px, 36vw);
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(246, 241, 228, 0.8);
+  pointer-events: none;
+}
+
+#hangar-wx {
+  margin: 10px 0 4px;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(11, 28, 48, 0.08);
+  border: 1px solid rgba(11, 61, 145, 0.12);
+}
+
+.wx-hangar-status {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: rgba(16, 32, 51, 0.72);
+}
+
+#hangar-wx-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
+}
+
+#hangar-wx .wx-btn {
+  background: rgba(11, 61, 145, 0.08);
+  color: var(--navy);
+  min-height: 38px;
+  font-size: 12px;
+}
+
+#hangar-wx .wx-btn.on {
+  background: rgba(42, 157, 143, 0.85);
+  color: #f6f1e4;
+  box-shadow: 0 0 0 1px rgba(42, 157, 143, 0.5);
+}
+
+#hangar-wx .wx-btn.live {
+  grid-column: 1 / -1;
+  background: rgba(239, 125, 0, 0.18);
+  color: #8a3d00;
+}
+
+#hangar-wx .wx-btn.live.on {
+  background: rgba(239, 125, 0, 0.9);
+  color: #1b1204;
+}
+
+/* Kept in DOM for hangar settings wiring; never shown over flight controls. */
+#wx-panel {
+  display: none !important;
+}
+
+#wx-panel[hidden] {
+  display: none !important;
+}
+
+#hints {
+  pointer-events: none;
+}
+
+#cautions {
+  pointer-events: none;
+  z-index: 1;
+}
+
+#mute-btn {
+  z-index: 2;
+}
+
+.wx-title {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(246, 241, 228, 0.7);
+  margin-bottom: 2px;
+}
+
+#wx-status {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--cream);
+  margin-bottom: 8px;
+}
+
+#wx-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.wx-btn {
+  border: 0;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--cream);
+  border-radius: 10px;
+  min-height: 40px;
+  padding: 6px 8px;
+  font-weight: 700;
+  font-size: 12px;
+  pointer-events: auto;
+  touch-action: manipulation;
+}
+
+.wx-btn.on {
+  background: rgba(42, 157, 143, 0.55);
+  box-shadow: 0 0 0 1px rgba(53, 255, 210, 0.45);
+}
+
+.wx-btn.live.on {
+  background: rgba(239, 125, 0, 0.7);
+  color: #1b1204;
+}
+
+#toast {
+  position: fixed;
+  z-index: 5;
+  top: 92px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-12px);
+  background: var(--navy);
+  color: var(--cream);
+  padding: 12px 16px;
+  border-radius: 999px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  max-width: min(520px, calc(100vw - 32px));
+  text-align: center;
+}
+
+#toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+@media (max-width: 900px) {
+  #hints { display: none; }
+  #adi { display: none; }
+  .readout { padding: 3px 6px; }
+  .readout b { font-size: 15px; }
+  #fly-actions {
+    max-width: calc(100vw - 24px);
+    bottom: max(10px, env(safe-area-inset-bottom));
+    gap: 5px;
+    padding: 6px;
+  }
+  #fly-actions button {
+    min-height: 42px;
+    font-size: 12px;
+    padding: 7px 8px;
+  }
+  #parts-panel {
+    top: max(8px, env(safe-area-inset-top));
+    right: max(8px, env(safe-area-inset-right));
+    width: min(140px, 34vw);
+    max-height: 34vh;
+  }
+  /* Keep AP up top — never over the throttle. */
+  #ap-panel {
+    top: max(8px, env(safe-area-inset-top));
+    bottom: auto;
+    right: max(156px, calc(env(safe-area-inset-right) + 148px));
+    width: min(140px, 32vw);
+    max-height: 34vh;
+  }
+  #hangar-wx-grid { grid-template-columns: 1fr 1fr; }
+  #coach { top: max(48px, calc(env(safe-area-inset-top) + 36px)); font-size: 13px; }
+  #cautions { top: max(48px, calc(env(safe-area-inset-top) + 36px)); gap: 6px; }
+  .caution { min-width: 96px; font-size: 11px; padding: 6px 8px; }
+  .readouts {
+    top: max(48px, calc(env(safe-area-inset-top) + 36px));
+    max-width: calc(100vw - 170px);
+  }
+  .topbar { gap: 8px; padding: 6px 10px; font-size: 12px; }
+  #joy { width: 124px; height: 124px; }
+  #joy-knob { width: 56px; height: 56px; margin: -28px 0 0 -28px; }
+  #aux-pad button { min-width: 92px; min-height: 48px; }
+  #throttle-slider { height: 148px; width: 52px; }
+  /* Lift stick/throttle so they don't fight the action dock. */
+  #controls {
+    bottom: max(64px, calc(env(safe-area-inset-bottom) + 52px));
+  }
+  #throttle-panel {
+    bottom: max(64px, calc(env(safe-area-inset-bottom) + 52px));
+  }
+}
+
+@media (max-height: 720px) {
+  #adi { display: none; }
+  #joy { width: 112px; height: 112px; }
+  #joy-knob { width: 48px; height: 48px; margin: -24px 0 0 -24px; }
+  #throttle-slider { height: 132px; }
+  #aux-pad button { min-height: 44px; }
+}
+
+@media (pointer: coarse) {
+  #fly-btn { min-height: 56px; font-size: 20px; }
+  .plane-btn { min-height: 68px; }
+  #parts-panel button { min-height: 48px; }
+}
