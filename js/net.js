@@ -1,4 +1,4 @@
-/** LAN WebSocket client for Turbo Flight Sim multiplayer. */
+/** WebSocket client for Turbo Flight Sim multiplayer (local host or Cloudflare). */
 
 export function createNet({ onWelcome, onPeerJoin, onPeerLeave, onPeerState, onPeerUpdate, onChat, onStatus }) {
   let ws = null

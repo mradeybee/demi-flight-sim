@@ -1,0 +1,17 @@
+# Wrangler uploads the project root as the site. Keep the Worker source,
+# Node toolchain, and local junk off the public asset list.
+.git
+.wrangler
+server
+scripts
+models/gear/_raw
+**/.DS_Store
+.env
+.env.*
+*.log
+
+# The page only needs the Three.js browser build.
+node_modules/**
+!node_modules/three/
+!node_modules/three/build/
+!node_modules/three/build/three.module.js

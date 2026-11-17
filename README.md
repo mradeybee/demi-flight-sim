@@ -2,7 +2,7 @@
 
 **This was vibe coded by a 7-year-old.**
 
-A browser flight sim you can open on a laptop or phone. Pick a plane in the hangar, take off from an airport named after you, and fly with friends on the same Wi-Fi.
+A browser flight sim you can open on a laptop or phone. Pick a plane in the hangar, take off from an airport named after you, and fly with friends on the same Wi-Fi or on a public Cloudflare link.
 
 ## How to start
 
@@ -16,6 +16,26 @@ npm start
 Then open [http://127.0.0.1:8765](http://127.0.0.1:8765).
 
 On a Mac you can also double-click **Play Turbo Flight Sim 0.1.command**. It starts the same server on port 8765 and opens the game. If Node is missing, that launcher falls back to a plain file server (singleplayer only — no multiplayer).
+
+## Host on Cloudflare
+
+The same game can run on [Cloudflare Workers](https://developers.cloudflare.com/workers/). The pages, scripts, and plane models are static assets. Multiplayer stays on `/ws`, held by one Durable Object so every pilot shares a lobby. Friends open the public link from anywhere.
+
+From this folder, once:
+
+```bash
+npm install
+npx wrangler login
+npm run deploy
+```
+
+Wrangler prints a `*.workers.dev` address. That is the link to share. `npm run preview` runs the Cloudflare version on your machine before you deploy.
+
+Cloudflare’s free plan counts each plane update as a request. A long flight with friends can use up the daily allowance, and multiplayer pauses until the next day. The page still loads.
+
+`wrangler.jsonc` is the project config. `server/cloudflare.mjs` accepts the WebSocket and relays joins, plane updates, and chat. `.assetsignore` keeps the Node toolchain off the public site and still uploads the Three.js build the page imports.
+
+The local Wi-Fi server is unchanged. Use **Play Turbo Flight Sim 0.1.command** or `npm start` when you want to host on this computer instead.
 
 ## How a flight starts
 
@@ -67,9 +87,11 @@ Weather is chosen in Settings, or set to live weather. The same choices are on t
 
 ## Playing with friends
 
-Multiplayer is for people on the same Wi-Fi. The person who starts the server is the host. Everyone else opens the LAN address the Terminal prints.
+On this computer, the person who starts the server is the host. Everyone else opens the LAN address the Terminal prints.
 
-Each pilot gets their own airport slot. Planes, chat, and position updates go over a WebSocket on the same port as the page. Chat is **T**, with an emoji picker.
+On Cloudflare, everyone opens the `*.workers.dev` link from `npm run deploy`. The hangar shows that link after you pick multiplayer.
+
+Each pilot gets their own airport slot. Planes, chat, and position updates go over a WebSocket at `/ws`. Chat is **T**, with an emoji picker.
 
 ## How the code fits together
 
@@ -88,6 +110,8 @@ The game is one web page. There is no build step. `index.html` loads `js/main.js
 | `js/looks.js`, `js/airline.js` | Paint and liveries |
 | `js/net.js` | Talks to the multiplayer server |
 | `server/multiplayer.mjs` | Serves the files and relays players on the LAN |
+| `server/cloudflare.mjs` | Same lobby on Cloudflare (`/ws` plus static assets) |
+| `wrangler.jsonc` | Cloudflare project config |
 | `models/` | Aircraft models. See `models/CREDITS.txt` for licenses |
 
 Flight is a simple model: thrust, drag, lift, and stall come from each plane’s cruise speed and mass in the catalog. The renderer is [Three.js](https://threejs.org/), loaded from `node_modules` through the import map in `index.html`.

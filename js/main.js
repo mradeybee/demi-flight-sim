@@ -979,7 +979,7 @@ const net = createNet({
       world.setLocalAirport(0, playerName)
       localOrigin = { ...world.localOrigin }
       refreshAirportUi()
-      toast("Flying offline — start with Play Turbo Flight Sim to host multiplayer.")
+      toast("Flying offline — multiplayer did not connect.")
       return
     }
     playerName = msg.you.name
@@ -4819,13 +4819,16 @@ function beginWithName(name, { multiplayer = false } = {}) {
   showChatUi()
   if (multiplayer) {
     net.connect(playerName)
+    const onLoopback = location.hostname === "127.0.0.1" || location.hostname === "localhost"
     if (hint) {
       const host = location.host || `127.0.0.1:8765`
-      hint.textContent = location.hostname === "127.0.0.1" || location.hostname === "localhost"
+      hint.textContent = onLoopback
         ? "Hosting locally — share your Wi‑Fi LAN address with friends (see Terminal)."
         : `Joined via ${host}`
     }
-    toast("Multiplayer on — friends on this Wi‑Fi can join.")
+    toast(onLoopback
+      ? "Multiplayer on — friends on this Wi‑Fi can join."
+      : "Multiplayer on — share this page’s link so friends can join.")
     appendChatLine({ text: "Chat is live — press T to talk.", system: true })
   } else {
     net.disconnect?.()
