@@ -10,8 +10,16 @@ models/gear/_raw
 .env.*
 *.log
 
-# The page only needs the Three.js browser build.
+# The page needs the Three.js build plus the GLTF loader it imports.
 node_modules/**
 !node_modules/three/
 !node_modules/three/build/
 !node_modules/three/build/three.module.js
+!node_modules/three/examples/
+!node_modules/three/examples/jsm/
+!node_modules/three/examples/jsm/loaders/
+!node_modules/three/examples/jsm/loaders/GLTFLoader.js
+!node_modules/three/examples/jsm/utils/
+!node_modules/three/examples/jsm/utils/BufferGeometryUtils.js
+!node_modules/three/examples/jsm/environments/
+!node_modules/three/examples/jsm/environments/RoomEnvironment.js
