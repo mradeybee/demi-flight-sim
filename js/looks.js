@@ -54,12 +54,43 @@ export function applyTypeLook(def) {
   const S = def.wing.span
 
   // —— Family airliners (close to AMV meshes; light layout nudges only) ——
-  if (["a321", "a319", "a220", "b757", "tu204", "e190", "ssj100", "crj900"].includes(id)) {
+  if (["a318", "a319", "a321", "a220", "b757", "tu204", "e170", "e190", "ssj100"].includes(id)) {
     def.profile = "tube"
     def.wing.y = -R * 0.35
     def.wingtips = true
     def.engines = twinJets(S, -R * 0.85, 0.4, R * 0.42)
     def.tail = { type: "low" }
+    return def
+  }
+  if (["crj700", "crj900"].includes(id)) {
+    def.profile = "tube"
+    def.wing.y = -R * 0.3
+    def.engines = rearTwins(R, L, R * 0.4)
+    def.tail = { type: "t" }
+    def.wingtips = true
+    return def
+  }
+  if (id === "a340") {
+    def.profile = "jumbo"
+    def.wing.y = -R * 0.3
+    def.engines = quadJets(S, -R * 0.75, 0.2, R * 0.4)
+    def.wingtips = true
+    return def
+  }
+  if (id === "beluga") {
+    def.profile = "jumbo"
+    def.hump = "full"
+    def.wing.y = -R * 0.25
+    def.engines = twinJets(S, -R * 0.7, 0.3, R * 0.4)
+    def.wingtips = false
+    return def
+  }
+  if (id === "bae146") {
+    def.profile = "twin"
+    def.wing.y = R * 0.45
+    def.engines = quadJets(S, R * 0.1, 0.2, R * 0.32)
+    def.tail = { type: "t" }
+    def.wingtips = false
     return def
   }
   if (id === "md80" || id === "caravelle") {
@@ -70,8 +101,26 @@ export function applyTypeLook(def) {
     def.wingtips = false
     return def
   }
-  if (id === "md11" || id === "falcon8x") {
-    def.profile = id === "md11" ? "jumbo" : "biz"
+  if (id === "md11") {
+    def.profile = "jumbo"
+    def.freighter = true
+    def.brand = "fedex"
+    def.wing.y = -R * 0.32
+    def.wing.z = -L * 0.04
+    def.wing.sweep = Math.max(def.wing.sweep || 0, L * 0.09)
+    def.wing.dihedral = 0.07
+    def.wingtips = true
+    def.tail = { type: "t", span: S * 0.38, chord: Math.max(1.2, L * 0.085) }
+    // Classic MD-11: underwing twins + #3 nestled in the T-tail / inlet trunk.
+    def.engines = [
+      { kind: "jet", x: -S * 0.155, y: -R * 0.78, z: def.wing.z + 0.6, r: R * 0.48, pylon: true },
+      { kind: "jet", x: S * 0.155, y: -R * 0.78, z: def.wing.z + 0.6, r: R * 0.48, pylon: true },
+      { kind: "jet", x: 0, y: R * 0.92, z: -L * 0.405, r: R * 0.38 },
+    ]
+    return def
+  }
+  if (id === "falcon8x") {
+    def.profile = "biz"
     def.engines = [
       ...twinJets(S, -R * 0.7, 0.3, R * 0.4),
       { kind: "jet", x: 0, y: R * 0.95, z: -L * 0.36, r: R * 0.36 },
@@ -108,7 +157,7 @@ export function applyTypeLook(def) {
   }
 
   // —— High-wing turboprops / airlifters ——
-  if (["atr72", "atr42", "dash8", "saab340", "do328", "f50", "an24", "cn235", "ys11", "l410", "beech1900"].includes(id)) {
+  if (["atr72", "atr42", "dash8", "q400", "saab340", "do328", "f50", "an24", "cn235", "ys11", "l410", "beech1900"].includes(id)) {
     def.profile = "twin"
     def.wing.y = R * 0.55
     def.wing.z = -L * 0.02
@@ -181,7 +230,7 @@ export function applyTypeLook(def) {
   }
 
   // —— Business jets (rear engines, T-tail) ——
-  if (["challenger350", "citationx", "citationcj4", "phenom300", "falcon2000", "hawker800", "lear45"].includes(id)) {
+  if (["challenger350", "citation", "citationx", "citationcj4", "phenom300", "falcon2000", "hawker800", "lear45"].includes(id)) {
     def.profile = "biz"
     def.wing.y = -R * 0.35
     def.engines = rearTwins(R, L, R * 0.34)
@@ -374,6 +423,20 @@ export function applyTypeLook(def) {
     def.engines = quadJets(S * 0.6, -R * 0.9, -L * 0.08, R * 0.32)
     def.wing.sweep = S * 0.5
     def.body = "#c5cdd4"
+    return def
+  }
+  if (id === "heli" || id === "evtol" || id === "drone") {
+    def.profile = "light"
+    def.wingtips = false
+    def.flaps = false
+    def.spoilers = false
+    return def
+  }
+  if (id === "ask21") {
+    def.profile = "light"
+    def.engines = []
+    def.tail = { type: "t" }
+    def.wingtips = false
     return def
   }
   if (id === "concorde" || id === "tu144") {

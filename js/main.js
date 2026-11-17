@@ -1,13 +1,49 @@
 import * as THREE from "three"
-import { RoomEnvironment } from "../node_modules/three/examples/jsm/environments/RoomEnvironment.js"
 import { PLANES, partButtons, partSummary } from "./catalog.js"
 import { createAircraft, disposeCraft, updateAircraft } from "./aircraft.js"
-import { preloadAircraftModels } from "./models.js"
-import { PAD, createWorld, WORLD_RADIUS } from "./world.js"
+import { CARS, createCar, disposeCar, updateCar, isCar } from "./vehicles.js"
+import { ensureModel, isModelCached, preloadAircraftModels, warmAircraftModels } from "./models.js"
+import { PAD, RUNWAY, createWorld, WORLD_RADIUS } from "./world.js"
 import { COCKPIT_BUTTONS } from "./cockpitButtons.js"
 import { createWeatherController } from "./weather.js"
 import { createNet } from "./net.js"
 import { sanitizeName, airportLabel, padForSlot } from "./airportSlots.js"
+import { createCrashFx } from "./crashFx.js"
+
+const FLEET = [...PLANES, ...CARS]
+
+function findFleetDef(id) {
+  return FLEET.find((v) => v.id === id) || PLANES[0]
+}
+
+function createVehicle(def) {
+  return isCar(def) ? createCar(def) : createAircraft(def)
+}
+
+function disposeVehicle(craft) {
+  if (!craft) return
+  if (isCar(craft.def)) disposeCar(craft)
+  else disposeCraft(craft)
+}
+
+function updateVehicle(craft, dt, input) {
+  if (isCar(craft.def)) {
+    updateCar(craft, dt, {
+      ...input,
+      steer: input.stick?.roll ?? input.stick?.yaw ?? input.steer ?? 0,
+    })
+  } else {
+    updateAircraft(craft, dt, input)
+  }
+}
+
+function playerIsCar() {
+  return isCar(player?.def)
+}
+
+function actionVerb(def) {
+  return isCar(def) ? "Drive" : "Fly"
+}
 import {
   AIRLINE_NAME,
   LIVERIES,
@@ -27,43 +63,48 @@ const hud = document.getElementById("hud")
 const list = document.getElementById("menu-list")
 const toastEl = document.getElementById("toast")
 
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" })
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75))
+const renderer = new THREE.WebGLRenderer({
+  canvas,
+  antialias: true,
+  powerPreference: "high-performance",
+  // Huge world + near cockpit camera — without this, ground planes z-fight / flicker.
+  logarithmicDepthBuffer: true,
+})
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5))
 renderer.setSize(window.innerWidth, window.innerHeight)
 renderer.outputColorSpace = THREE.SRGBColorSpace
 renderer.toneMapping = THREE.ACESFilmicToneMapping
-renderer.toneMappingExposure = 1.05
+renderer.toneMappingExposure = 0.92
 renderer.shadowMap.enabled = true
 renderer.shadowMap.type = THREE.PCFSoftShadowMap
 
 const scene = new THREE.Scene()
-scene.fog = new THREE.Fog(0xc5e4f8, 2500, WORLD_RADIUS * 0.85)
-scene.background = new THREE.Color(0x8ecfff)
-{
-  const pmrem = new THREE.PMREMGenerator(renderer)
-  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
-  pmrem.dispose()
-}
+scene.fog = new THREE.Fog(0xb7c9d6, 1800, WORLD_RADIUS * 0.62)
+scene.background = new THREE.Color(0x6fa8c8)
 
-const camera = new THREE.PerspectiveCamera(68, window.innerWidth / window.innerHeight, 0.08, WORLD_RADIUS * 1.6)
-const hemi = new THREE.HemisphereLight(0xd7ecff, 0x5d8f45, 1.05)
-const sun = new THREE.DirectionalLight(0xfff2d6, 2.35)
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.12, WORLD_RADIUS * 1.6)
+const hemi = new THREE.HemisphereLight(0xc8dceb, 0x4a5e3a, 0.72)
+const sun = new THREE.DirectionalLight(0xfff0d4, 2.05)
 sun.castShadow = true
-sun.shadow.mapSize.set(2048, 2048)
+sun.shadow.mapSize.set(1024, 1024)
 sun.shadow.bias = -0.0004
 sun.shadow.normalBias = 0.05
 sun.shadow.camera.near = 10
 sun.shadow.camera.far = 700
 scene.add(hemi, sun, sun.target)
-const fill = new THREE.DirectionalLight(0xc5d7ff, 0.28)
+const fill = new THREE.DirectionalLight(0xa8bdd4, 0.22)
 fill.position.set(-180, 90, -120)
 scene.add(fill)
 
-const world = createWorld(scene)
-const weather = createWeatherController({ scene, hemi, sun, fill, world })
+// Built during bootMenu so the name gate can appear immediately.
+let world = null
+let weather = null
 const keys = new Set()
 const held = { pitch: 0, roll: 0, yaw: 0, throttle: 0, brake: 0, run: 0 }
 const stick = { pitch: 0, roll: 0, yaw: 0 }
+/** Mouse / trackpad aim stick — screen offset from center steers the plane. */
+const mouseStick = { pitch: 0, roll: 0, live: false }
+let mouseFlyHintShown = false
 const velocity = new THREE.Vector3()
 const forward = new THREE.Vector3()
 const up = new THREE.Vector3()
@@ -98,10 +139,19 @@ const ap = {
   hdg: true,
   alt: true,
   spd: true,
+  land: false,
+  landPhase: null,
+  landHdg: 0,
+  landFix: null,
+  landThresh: null,
   targetHdg: 0,
   targetAlt: 100,
   targetSpd: 55,
 }
+const LAND_FIX_DIST = 2800
+const LAND_NAV_ALT = 280
+const LAND_ALIGN_ALT = 140
+const LAND_GLIDE_TAN = Math.tan((3.2 * Math.PI) / 180)
 const SYS_BUTTONS = COCKPIT_BUTTONS
 const systems = Object.fromEntries(SYS_BUTTONS.map((btn) => [btn.id, !!btn.start]))
 let dragging = false
@@ -117,21 +167,476 @@ let outside = false
 let chuteOpen = false
 let pilot = null
 const pilotVel = new THREE.Vector3()
+const worldCars = []
+let homeCraft = null
 let playerName = "Pilot"
 let localOrigin = { x: 0, z: 0 }
 const remotes = new Map()
 let netSyncAcc = 0
 let trafficUiAcc = 0
+let banUiAcc = 0
 const tmpQuat = new THREE.Quaternion()
+
+/** Promo unlocks — book is admin-only; codes still redeem if typed. */
+const cheats = {
+  admin: false,
+  crashPhysics: false,
+  turbo: false,
+  slowmo: false,
+}
+/** Named codes shown in the admin book. */
+const PROMO_BOOK = [
+  { code: "demi", effect: "Admin — unlocks this list, ignores bans, shrugs crashes" },
+  { code: "crash", effect: "Toggle cinematic crash physics (roll, fire, parts)" },
+  { code: "ban", effect: "Lock yourself out for 10 minutes (admin ignores)" },
+  { code: "unban", effect: "Clear an active ban timer" },
+  { code: "turbo", effect: "Toggle 2× thrust / top speed" },
+  { code: "fix", effect: "Clear every aircraft / car failure" },
+  { code: "sky", effect: "Launch ~800 m up with climb speed (fly mode)" },
+  { code: "home", effect: "Warp back to the hangar pad" },
+  { code: "nofail", effect: "Turn random failures off" },
+  { code: "hard", effect: "Turn random failures to hard mode" },
+  { code: "storm", effect: "Switch weather to storm" },
+  { code: "clear", effect: "Switch weather to clear skies" },
+  { code: "slowmo", effect: "Toggle half-speed slow motion" },
+]
+/** Ninety million numbered codes: p1 … p90000000 (effect picked by number). */
+const MEGA_PROMO_COUNT = 90_000_000
+const MEGA_PROMO_EFFECTS = [
+  { id: "boost", label: "Speed burst" },
+  { id: "skyhop", label: "Altitude hop" },
+  { id: "home", label: "Warp home" },
+  { id: "fix", label: "Clear failures" },
+  { id: "turbo", label: "Toggle turbo" },
+  { id: "slowmo", label: "Toggle slow-mo" },
+  { id: "crash", label: "Toggle crash physics" },
+  { id: "nofail", label: "Failures off" },
+  { id: "hard", label: "Failures hard" },
+  { id: "clear", label: "Clear weather" },
+  { id: "dawn", label: "Dawn weather" },
+  { id: "windy", label: "Windy weather" },
+  { id: "cloudy", label: "Cloudy weather" },
+  { id: "rain", label: "Rain weather" },
+  { id: "storm", label: "Storm weather" },
+  { id: "fog", label: "Fog weather" },
+  { id: "spin", label: "Yaw spin" },
+  { id: "dive", label: "Nose dive kick" },
+  { id: "climb", label: "Climb kick" },
+  { id: "brake", label: "Full stop" },
+]
+let banUntil = 0
+let crashTimer = 0
+const crashSpin = new THREE.Vector3()
+let crashRollAxis = new THREE.Vector3(1, 0, 0)
+let crashGroundHits = 0
+let crashFx = null
+try {
+  cheats.admin = localStorage.getItem("tfs-promo-admin") === "1"
+  cheats.crashPhysics = localStorage.getItem("tfs-promo-crash") === "1"
+  cheats.turbo = localStorage.getItem("tfs-promo-turbo") === "1"
+  cheats.slowmo = localStorage.getItem("tfs-promo-slowmo") === "1"
+  banUntil = Number(localStorage.getItem("tfs-ban-until") || 0) || 0
+  localStorage.removeItem("tfs-promo-ghost")
+} catch { /* ignore */ }
+
+function banRemainingMs() {
+  return Math.max(0, banUntil - Date.now())
+}
+
+function isBanned() {
+  if (cheats.admin) return false
+  return banRemainingMs() > 0
+}
+
+function formatBanClock(ms) {
+  const total = Math.max(0, Math.ceil(ms / 1000))
+  const m = Math.floor(total / 60)
+  const s = total % 60
+  return `${m}:${String(s).padStart(2, "0")}`
+}
+
+function refreshBanLock() {
+  const lock = document.getElementById("ban-lock")
+  const left = document.getElementById("ban-left")
+  if (!lock) return
+  if (!isBanned()) {
+    if (banUntil) {
+      banUntil = 0
+      try { localStorage.removeItem("tfs-ban-until") } catch { /* ignore */ }
+    }
+    lock.hidden = true
+    return
+  }
+  lock.hidden = false
+  if (left) left.textContent = formatBanClock(banRemainingMs())
+}
+
+function persistCheatFlag(key, on) {
+  try { localStorage.setItem(key, on ? "1" : "0") } catch { /* ignore */ }
+}
+
+function megaPromoEffect(n) {
+  // Scramble so nearby numbers feel different.
+  const mixed = Math.imul(n, 2654435761) >>> 0
+  return MEGA_PROMO_EFFECTS[mixed % MEGA_PROMO_EFFECTS.length]
+}
+
+function appendPromoBookRow(list, code, effect) {
+  const li = document.createElement("li")
+  const kbd = document.createElement("kbd")
+  kbd.textContent = code
+  const span = document.createElement("span")
+  span.className = "promo-effect"
+  span.textContent = effect
+  li.append(kbd, span)
+  list.appendChild(li)
+}
+
+function refreshPromoBook() {
+  const book = document.getElementById("promo-book")
+  const list = document.getElementById("promo-book-list")
+  if (!book || !list) return
+  // Cheat sheet is owner-only — only after admin (`demi`).
+  book.hidden = !cheats.admin
+  if (!cheats.admin) {
+    list.innerHTML = ""
+    return
+  }
+  list.innerHTML = ""
+  for (const entry of PROMO_BOOK) {
+    appendPromoBookRow(list, entry.code, entry.effect)
+  }
+  appendPromoBookRow(
+    list,
+    `p1…p${MEGA_PROMO_COUNT}`,
+    `${MEGA_PROMO_COUNT.toLocaleString("en-US")} numbered codes — each number picks an effect`
+  )
+  // Sample a few so you can see what they do without listing 90 million rows.
+  for (const sample of [1, 7, 42, 100, 9001, 1_000_000, MEGA_PROMO_COUNT]) {
+    const effect = megaPromoEffect(sample)
+    appendPromoBookRow(list, `p${sample}`, effect.label)
+  }
+}
+
+const PROMO_COLLAPSE_KEY = "tfs-promo-collapsed"
+
+function promoSectionCollapsed() {
+  try {
+    const raw = localStorage.getItem(PROMO_COLLAPSE_KEY)
+    // Default collapsed so the admin book never covers the plane list.
+    if (raw == null) return true
+    return raw === "1"
+  } catch {
+    return true
+  }
+}
+
+function setPromoSectionCollapsed(collapsed) {
+  try {
+    localStorage.setItem(PROMO_COLLAPSE_KEY, collapsed ? "1" : "0")
+  } catch {
+    /* ignore */
+  }
+  syncPromoSectionUi()
+}
+
+function syncPromoSectionUi() {
+  const panel = document.getElementById("hangar-promo")
+  const body = document.getElementById("promo-body")
+  const toggle = document.getElementById("promo-toggle")
+  const headTitle = panel?.querySelector(".promo-head-title")
+  if (!panel || !body || !toggle) return
+  const collapsed = promoSectionCollapsed()
+  body.hidden = collapsed
+  panel.classList.toggle("is-open", !collapsed)
+  toggle.setAttribute("aria-expanded", collapsed ? "false" : "true")
+  toggle.textContent = collapsed ? "Show" : "Hide"
+  if (headTitle) {
+    const bits = ["Promo codes"]
+    if (collapsed && cheats.admin) bits.push("Admin on")
+    if (collapsed && cheats.crashPhysics) bits.push("Crash on")
+    headTitle.textContent = bits.join(" · ")
+  }
+}
+
+function refreshPromoStatus() {
+  const status = document.getElementById("promo-status")
+  if (!status) return
+  const bits = []
+  if (cheats.admin) bits.push("Admin on")
+  if (cheats.crashPhysics) bits.push("Crash physics on")
+  if (cheats.turbo) bits.push("Turbo on")
+  if (cheats.slowmo) bits.push("Slow-mo on")
+  if (isBanned()) bits.push(`Banned ${formatBanClock(banRemainingMs())}`)
+  status.textContent = bits.length ? bits.join(" · ") : "Enter a code for extras."
+  refreshPromoBook()
+  syncPromoSectionUi()
+}
+
+function promoWarpHome() {
+  if (!player) {
+    toast("No plane to warp.")
+    return false
+  }
+  if (outside) enterPlane({ quiet: true })
+  recovering = false
+  crashTimer = 0
+  crashPromptOpen = false
+  document.getElementById("crash-screen")?.setAttribute("hidden", "")
+  place(player, PAD.x, PAD.z, 0.4)
+  velocity.set(0, 0, 0)
+  throttle = 0
+  systems.parking = true
+  grounded = true
+  snapCam = true
+  toast("Warped home to the pad.")
+  beep(520, 0.09)
+  return true
+}
+
+function promoSkyLaunch(height = 800, climb = 42) {
+  if (mode !== "fly" || !player || outside || playerIsCar()) {
+    toast("Sky works in the air — hop in a plane and Fly first.")
+    return false
+  }
+  player.root.position.y += height
+  velocity.y = Math.max(velocity.y, climb)
+  grounded = false
+  toast("Sky launch — you’re up high.")
+  beep(900, 0.1)
+  return true
+}
+
+function applyMegaPromo(n) {
+  const effect = megaPromoEffect(n)
+  const tag = `p${n}`
+  switch (effect.id) {
+    case "boost": {
+      if (!player || mode !== "fly") {
+        toast(`${tag}: fly first for a speed burst.`)
+        return false
+      }
+      const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(player.root.quaternion)
+      velocity.addScaledVector(forward, 55 + (n % 40))
+      throttle = 1
+      systems.parking = false
+      toast(`${tag}: ${effect.label}!`)
+      beep(780, 0.08)
+      return true
+    }
+    case "skyhop":
+      return promoSkyLaunch(220 + (n % 900), 28 + (n % 30))
+    case "home":
+      return promoWarpHome()
+    case "fix":
+      clearFailures({ quiet: true })
+      toast(`${tag}: failures cleared.`)
+      beep(640, 0.08)
+      refreshPromoStatus()
+      return true
+    case "turbo":
+      cheats.turbo = !cheats.turbo
+      persistCheatFlag("tfs-promo-turbo", cheats.turbo)
+      refreshPromoStatus()
+      toast(`${tag}: turbo ${cheats.turbo ? "on" : "off"}.`)
+      beep(720, 0.08)
+      return true
+    case "slowmo":
+      cheats.slowmo = !cheats.slowmo
+      persistCheatFlag("tfs-promo-slowmo", cheats.slowmo)
+      refreshPromoStatus()
+      toast(`${tag}: slow-mo ${cheats.slowmo ? "on" : "off"}.`)
+      beep(360, 0.1)
+      return true
+    case "crash":
+      cheats.crashPhysics = !cheats.crashPhysics
+      persistCheatFlag("tfs-promo-crash", cheats.crashPhysics)
+      refreshPromoStatus()
+      toast(`${tag}: crash physics ${cheats.crashPhysics ? "on" : "off"}.`)
+      beep(520, 0.08)
+      return true
+    case "nofail":
+      setFailMode("off")
+      clearFailures({ quiet: true })
+      toast(`${tag}: failures off.`)
+      beep(500, 0.08)
+      refreshPromoStatus()
+      return true
+    case "hard":
+      setFailMode("hard")
+      toast(`${tag}: failures hard.`)
+      beep(200, 0.12, "square")
+      refreshPromoStatus()
+      return true
+    case "clear":
+    case "dawn":
+    case "windy":
+    case "cloudy":
+    case "rain":
+    case "storm":
+    case "fog":
+      setWeather(effect.id)
+      toast(`${tag}: ${effect.label}.`)
+      refreshPromoStatus()
+      return true
+    case "spin":
+      if (!player || mode !== "fly") {
+        toast(`${tag}: fly first to spin.`)
+        return false
+      }
+      player.root.rotateY((n % 2 === 0 ? 1 : -1) * 1.2)
+      toast(`${tag}: ${effect.label}!`)
+      beep(440, 0.07)
+      return true
+    case "dive":
+      if (!player || mode !== "fly" || outside || playerIsCar()) {
+        toast(`${tag}: fly a plane for a dive kick.`)
+        return false
+      }
+      velocity.y = Math.min(velocity.y, -35 - (n % 25))
+      grounded = false
+      toast(`${tag}: ${effect.label}!`)
+      beep(180, 0.1, "sawtooth")
+      return true
+    case "climb":
+      return promoSkyLaunch(120 + (n % 400), 50 + (n % 40))
+    case "brake":
+      if (!player || mode !== "fly") {
+        toast(`${tag}: fly first to stop.`)
+        return false
+      }
+      velocity.set(0, 0, 0)
+      throttle = 0
+      systems.parking = true
+      toast(`${tag}: full stop.`)
+      beep(220, 0.08)
+      return true
+    default:
+      toast(`${tag}: unknown effect.`)
+      return false
+  }
+}
+
+function redeemPromo(raw) {
+  const code = String(raw || "").trim().toLowerCase()
+  if (!code) {
+    toast("Type a promo code first.")
+    return false
+  }
+  const mega = /^p(\d{1,8})$/.exec(code)
+  if (mega) {
+    const n = Number(mega[1])
+    if (n >= 1 && n <= MEGA_PROMO_COUNT) return applyMegaPromo(n)
+  }
+  if (code === "demi") {
+    cheats.admin = true
+    banUntil = 0
+    try {
+      localStorage.setItem("tfs-promo-admin", "1")
+      localStorage.removeItem("tfs-ban-until")
+    } catch { /* ignore */ }
+    refreshBanLock()
+    refreshPromoStatus()
+    refreshAirportUi()
+    toast("Admin unlocked — your promo book is open.")
+    beep(880, 0.1)
+    return true
+  }
+  if (code === "crash") {
+    cheats.crashPhysics = !cheats.crashPhysics
+    persistCheatFlag("tfs-promo-crash", cheats.crashPhysics)
+    refreshPromoStatus()
+    toast(cheats.crashPhysics ? "Crash physics on — roll, fire, parts fly, ground scars." : "Crash physics off.")
+    beep(520, 0.08)
+    return true
+  }
+  if (code === "ban") {
+    if (cheats.admin) {
+      toast("Admin ignores bans.")
+      return false
+    }
+    banUntil = Date.now() + 10 * 60 * 1000
+    try { localStorage.setItem("tfs-ban-until", String(banUntil)) } catch { /* ignore */ }
+    if (mode === "fly") showMenu()
+    refreshBanLock()
+    refreshPromoStatus()
+    toast("Banned for 10 minutes.")
+    beep(90, 0.35, "sawtooth")
+    return true
+  }
+  if (code === "unban") {
+    banUntil = 0
+    try { localStorage.removeItem("tfs-ban-until") } catch { /* ignore */ }
+    refreshBanLock()
+    refreshPromoStatus()
+    toast("Ban cleared.")
+    beep(660, 0.08)
+    return true
+  }
+  if (code === "turbo") {
+    cheats.turbo = !cheats.turbo
+    persistCheatFlag("tfs-promo-turbo", cheats.turbo)
+    refreshPromoStatus()
+    toast(cheats.turbo ? "Turbo on — 2× thrust and top speed." : "Turbo off.")
+    beep(720, 0.08)
+    return true
+  }
+  if (code === "fix") {
+    clearFailures({ quiet: true })
+    toast("All failures cleared.")
+    beep(640, 0.08)
+    refreshPromoStatus()
+    return true
+  }
+  if (code === "sky") return promoSkyLaunch()
+  if (code === "home") return promoWarpHome()
+  if (code === "nofail") {
+    setFailMode("off")
+    clearFailures({ quiet: true })
+    toast("Failures off.")
+    beep(500, 0.08)
+    refreshPromoStatus()
+    return true
+  }
+  if (code === "hard") {
+    setFailMode("hard")
+    toast("Failures set to hard.")
+    beep(200, 0.12, "square")
+    refreshPromoStatus()
+    return true
+  }
+  if (code === "storm") {
+    setWeather("storm")
+    refreshPromoStatus()
+    return true
+  }
+  if (code === "clear") {
+    setWeather("clear")
+    refreshPromoStatus()
+    return true
+  }
+  if (code === "slowmo") {
+    cheats.slowmo = !cheats.slowmo
+    persistCheatFlag("tfs-promo-slowmo", cheats.slowmo)
+    refreshPromoStatus()
+    toast(cheats.slowmo ? "Slow-mo on — half speed." : "Slow-mo off.")
+    beep(360, 0.1)
+    return true
+  }
+  toast("Unknown promo code.")
+  return false
+}
 
 function refreshAirportUi() {
   const banner = document.getElementById("airport-banner")
   const eyebrow = document.getElementById("hangar-eyebrow")
-  const label = world.airportName || airportLabel(playerName)
+  const label = world?.airportName || airportLabel(playerName)
   if (banner) banner.textContent = `You are at ${label}`
-  if (eyebrow) eyebrow.textContent = label
+  if (eyebrow) eyebrow.textContent = cheats.admin ? `ADMIN · ${label}` : label
   const rename = document.getElementById("rename-input")
   if (rename && !rename.matches(":focus")) rename.value = playerName
+  refreshPromoStatus()
+  refreshBanLock()
   const box = document.getElementById("players-online")
   if (!box) return
   box.innerHTML = ""
@@ -174,6 +679,108 @@ function makeNameplate(text) {
   return mesh
 }
 
+function wrapChatBubbleLines(ctx, text, maxWidth) {
+  const words = String(text || "").split(/\s+/).filter(Boolean)
+  const lines = []
+  let line = ""
+  for (const word of words) {
+    const next = line ? `${line} ${word}` : word
+    if (ctx.measureText(next).width > maxWidth && line) {
+      lines.push(line)
+      line = word
+    } else {
+      line = next
+    }
+  }
+  if (line) lines.push(line)
+  return lines.slice(0, 3)
+}
+
+function makeChatBubbleSprite(text) {
+  const canvas = document.createElement("canvas")
+  canvas.width = 512
+  canvas.height = 192
+  const ctx = canvas.getContext("2d")
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+  ctx.font = "bold 36px sans-serif"
+  const lines = wrapChatBubbleLines(ctx, text, 440)
+  const padX = 28
+  const padY = 22
+  const lineH = 44
+  const boxH = padY * 2 + Math.max(1, lines.length) * lineH
+  const boxY = canvas.height - boxH - 28
+  // Bubble body
+  ctx.fillStyle = "rgba(8,14,22,0.92)"
+  ctx.strokeStyle = "rgba(255,183,3,0.85)"
+  ctx.lineWidth = 6
+  const r = 28
+  const x = 16
+  const w = canvas.width - 32
+  ctx.beginPath()
+  ctx.moveTo(x + r, boxY)
+  ctx.arcTo(x + w, boxY, x + w, boxY + boxH, r)
+  ctx.arcTo(x + w, boxY + boxH, x, boxY + boxH, r)
+  ctx.lineTo(x + w * 0.42, boxY + boxH)
+  ctx.lineTo(x + w * 0.5, canvas.height - 8)
+  ctx.lineTo(x + w * 0.58, boxY + boxH)
+  ctx.arcTo(x, boxY + boxH, x, boxY, r)
+  ctx.arcTo(x, boxY, x + w, boxY, r)
+  ctx.closePath()
+  ctx.fill()
+  ctx.stroke()
+  ctx.fillStyle = "#f6f1e4"
+  ctx.textAlign = "center"
+  ctx.textBaseline = "middle"
+  const startY = boxY + padY + lineH * 0.5
+  for (let i = 0; i < lines.length; i++) {
+    ctx.fillText(lines[i], canvas.width / 2, startY + i * lineH)
+  }
+  const tex = new THREE.CanvasTexture(canvas)
+  tex.colorSpace = THREE.SRGBColorSpace
+  const mat = new THREE.MeshBasicMaterial({
+    map: tex,
+    transparent: true,
+    depthWrite: false,
+    fog: false,
+  })
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(28, 10.5), mat)
+  mesh.name = "chatBubble"
+  mesh.renderOrder = 8
+  mesh.userData.chatBubble = true
+  return mesh
+}
+
+function craftForChatSender(senderId) {
+  if (net.you && senderId === net.you.id && player?.root) return player
+  const remote = remotes.get(senderId)
+  return remote?.craft || null
+}
+
+function showWorldChatBubble(senderId, text) {
+  const craft = craftForChatSender(senderId)
+  if (!craft?.root || !text) return
+  // Replace any existing bubble on this craft.
+  const old = craft.root.children.find((c) => c.userData?.chatBubble)
+  if (old) {
+    craft.root.remove(old)
+    old.material.map?.dispose()
+    old.material.dispose()
+    old.geometry?.dispose?.()
+    clearTimeout(old.userData?.chatBubbleTimer)
+  }
+  const bubble = makeChatBubbleSprite(text)
+  const span = Math.max(12, craft.def?.wing?.span || craft.def?.width || 20)
+  bubble.position.y = Math.max(16, span * 0.55)
+  craft.root.add(bubble)
+  const timer = setTimeout(() => {
+    if (bubble.parent) bubble.parent.remove(bubble)
+    bubble.material.map?.dispose()
+    bubble.material.dispose()
+    bubble.geometry?.dispose?.()
+  }, 5200)
+  bubble.userData.chatBubbleTimer = timer
+}
+
 function placeRemoteAtPad(remote, slot) {
   if (slot == null || !remote?.craft) return
   const pad = padForSlot(slot)
@@ -186,16 +793,38 @@ function placeRemoteAtPad(remote, slot) {
   remote.craft.root.visible = true
 }
 
+function refreshRemoteMesh(remote, def) {
+  if (!remote || !def) return
+  const pos = remote.craft.root.position.clone()
+  const quat = remote.craft.root.quaternion.clone()
+  const visible = remote.craft.root.visible
+  scene.remove(remote.craft.root)
+  disposeVehicle(remote.craft)
+  const craft = createVehicle(def)
+  craft.root.visible = visible
+  craft.root.position.copy(pos)
+  craft.root.quaternion.copy(quat)
+  const plate = makeNameplate(remote.name || "Pilot")
+  craft.root.add(plate)
+  if (isCar(def)) plate.position.y = 3.2
+  scene.add(craft.root)
+  remote.craft = craft
+  remote.plate = plate
+  remote.planeId = def.id
+  remote.kind = def.kind || "aircraft"
+}
+
 function upsertRemote(peer) {
   if (!peer?.id) return
   let remote = remotes.get(peer.id)
-  const planeId = peer.state?.planeId || peer.planeId || "b737"
-  const def = PLANES.find((p) => p.id === planeId) || PLANES[0]
+  const vehicleId = peer.state?.vehicleId || peer.state?.planeId || peer.planeId || "b737"
+  const def = findFleetDef(vehicleId)
   if (!remote) {
-    const craft = createAircraft(def)
+    const craft = createVehicle(def)
     craft.root.visible = true
     const plate = makeNameplate(peer.name || "Pilot")
     craft.root.add(plate)
+    if (isCar(def)) plate.position.y = 3.2
     scene.add(craft.root)
     remote = {
       id: peer.id,
@@ -204,6 +833,7 @@ function upsertRemote(peer) {
       craft,
       plate,
       planeId: def.id,
+      kind: def.kind || "aircraft",
       targetPos: new THREE.Vector3(),
       targetQuat: new THREE.Quaternion(),
       hasPose: false,
@@ -213,17 +843,31 @@ function upsertRemote(peer) {
       world.ensureAirport(peer.slot, peer.name)
       placeRemoteAtPad(remote, peer.slot)
     }
+    if (!isModelCached(def.id)) {
+      ensureModel(def.id).then((ok) => {
+        const cur = remotes.get(peer.id)
+        if (ok && cur && cur.planeId === def.id) refreshRemoteMesh(cur, def)
+      })
+    }
   } else if (remote.planeId !== def.id) {
     scene.remove(remote.craft.root)
-    disposeCraft(remote.craft)
-    const craft = createAircraft(def)
+    disposeVehicle(remote.craft)
+    const craft = createVehicle(def)
     craft.root.visible = true
     const plate = makeNameplate(peer.name || remote.name || "Pilot")
     craft.root.add(plate)
+    if (isCar(def)) plate.position.y = 3.2
     scene.add(craft.root)
     remote.craft = craft
     remote.plate = plate
     remote.planeId = def.id
+    remote.kind = def.kind || "aircraft"
+    if (!isModelCached(def.id)) {
+      ensureModel(def.id).then((ok) => {
+        const cur = remotes.get(peer.id)
+        if (ok && cur && cur.planeId === def.id) refreshRemoteMesh(cur, def)
+      })
+    }
     if (remote.hasPose) {
       craft.root.position.copy(remote.targetPos)
       craft.root.quaternion.copy(remote.targetQuat)
@@ -251,7 +895,7 @@ function removeRemote(id) {
   const remote = remotes.get(id)
   if (!remote) return
   scene.remove(remote.craft.root)
-  disposeCraft(remote.craft)
+  disposeVehicle(remote.craft)
   remotes.delete(id)
   refreshAirportUi()
 }
@@ -283,11 +927,15 @@ function applyRemoteState(msg) {
   }
   craft.root.visible = true
   if (craft.controls) {
-    craft.controls.gear = msg.gear ?? 1
-    craft.controls.flapStep = msg.flaps || 0
-    craft.controls.doors = msg.doors || 0
-    craft.controls.lights = msg.lights || 0
-    craft.controls.spoilers = msg.spoilers || 0
+    if (isCar(craft.def)) {
+      craft.controls.lights = msg.lights || 0
+    } else {
+      craft.controls.gear = msg.gear ?? 1
+      craft.controls.flapStep = msg.flaps || 0
+      craft.controls.doors = msg.doors || 0
+      craft.controls.lights = msg.lights || 0
+      craft.controls.spoilers = msg.spoilers || 0
+    }
   }
   remote.mode = msg.mode || "menu"
   remote.throttle = Number(msg.throttle) || 0
@@ -381,6 +1029,9 @@ const net = createNet({
   onPeerState(msg) {
     applyRemoteState(msg)
   },
+  onChat(msg) {
+    pushChatMessage(msg)
+  },
   onStatus(text) {
     const el = document.getElementById("join-hint")
     if (el) el.textContent = text
@@ -396,6 +1047,8 @@ function pushNetState(dt) {
   const q = player.root.quaternion
   net.sendState({
     planeId: player.def.id,
+    vehicleId: player.def.id,
+    kind: player.def.kind || "aircraft",
     x: player.root.position.x,
     y: player.root.position.y,
     z: player.root.position.z,
@@ -404,11 +1057,11 @@ function pushNetState(dt) {
     qz: q.z,
     qw: q.w,
     throttle,
-    gear: player.controls.gear,
-    flaps: player.controls.flapStep,
-    doors: player.controls.doors,
-    lights: player.controls.lights,
-    spoilers: player.controls.spoilers,
+    gear: player.controls.gear ?? 1,
+    flaps: player.controls.flapStep ?? 0,
+    doors: player.controls.doors ?? 0,
+    lights: player.controls.lights ?? 0,
+    spoilers: player.controls.spoilers ?? 0,
     outside,
     mode,
   })
@@ -429,14 +1082,245 @@ let lastCalloutAt = 0
 const wind = new THREE.Vector3()
 const windSample = new THREE.Vector3()
 const flightInfo = { bank: 0, aoa: 0, stallSpeed: 0, warnings: [], windshear: false, windStrength: 0 }
+
+/** Active system failures — planes and cars. */
+const failures = {
+  eng1: false,
+  eng2: false,
+  fire: false,
+  fireIndex: -1,
+  hyd: false,
+  elec: false,
+  gearJam: false,
+  carEng: false,
+  tire: false,
+  tireSide: 1,
+  brakes: false,
+}
+let failMode = "on" // off | on | hard
+let failAcc = 0
+let failCooldown = 18
+try {
+  const savedFail = localStorage.getItem("tfs-fail-mode")
+  if (savedFail === "off" || savedFail === "on" || savedFail === "hard") failMode = savedFail
+} catch { /* ignore */ }
+
+const AIR_FAIL_KINDS = ["eng1", "eng2", "fire", "hyd", "elec", "gearJam"]
+const CAR_FAIL_KINDS = ["carEng", "tire", "brakes"]
+
+function anyFailure() {
+  return failures.eng1 || failures.eng2 || failures.fire || failures.hyd || failures.elec
+    || failures.gearJam || failures.carEng || failures.tire || failures.brakes
+}
+
+function clearFailures({ quiet = false } = {}) {
+  failures.eng1 = false
+  failures.eng2 = false
+  failures.fire = false
+  failures.fireIndex = -1
+  failures.hyd = false
+  failures.elec = false
+  failures.gearJam = false
+  failures.carEng = false
+  failures.tire = false
+  failures.brakes = false
+  setCaution("eng1", false)
+  setCaution("eng2", false)
+  setCaution("fire", false)
+  setCaution("hyd", false)
+  setCaution("elec", false)
+  setCaution("gearjam", false)
+  setCaution("careng", false)
+  setCaution("tire", false)
+  setCaution("brakes", false)
+  refreshFailPanel()
+  if (!quiet) toast("Systems reset — all failures cleared.")
+}
+
+function failLabel(kind) {
+  if (kind === "eng1") return "Engine 1 failed!"
+  if (kind === "eng2") return "Engine 2 failed!"
+  if (kind === "fire") return "Engine fire! Tap Put out fire next to the throttle."
+  if (kind === "hyd") return "Hydraulic failure — controls feel heavy."
+  if (kind === "elec") return "Electrical failure — autopilot and lights cut."
+  if (kind === "gearJam") return "Landing gear jammed!"
+  if (kind === "carEng") return "Car engine sputter — power is down."
+  if (kind === "tire") return "Flat tire — the car pulls sideways."
+  if (kind === "brakes") return "Brake failure — use space carefully / coast."
+  return "System failure!"
+}
+
+function triggerFailure(kind, { practice = false } = {}) {
+  if (!kind || failMode === "off" && !practice) return false
+  if (kind === "eng1" || kind === "eng2") {
+    if (failures[kind]) return false
+    failures[kind] = true
+  } else if (kind === "fire") {
+    failures.fire = true
+    const n = Math.max(1, player?.def?.engines?.length || 2)
+    failures.fireIndex = Math.floor(Math.random() * n)
+    if (failures.fireIndex % 2 === 0) failures.eng1 = true
+    else failures.eng2 = true
+  } else if (kind === "hyd") failures.hyd = true
+  else if (kind === "elec") {
+    failures.elec = true
+    if (ap.on) disengageAp("Electrical failure — autopilot offline.")
+    if (player?.controls) {
+      player.controls.lights = 0
+      player.setLights?.(false)
+    }
+  } else if (kind === "gearJam") failures.gearJam = true
+  else if (kind === "carEng") failures.carEng = true
+  else if (kind === "tire") {
+    failures.tire = true
+    failures.tireSide = Math.random() < 0.5 ? -1 : 1
+  } else if (kind === "brakes") failures.brakes = true
+  else return false
+
+  failCooldown = failMode === "hard" ? 12 : 22
+  beep(140, 0.2, "sawtooth")
+  setTimeout(() => beep(110, 0.25, "square"), 140)
+  toast((practice ? "Practice: " : "") + failLabel(kind))
+  refreshFailCautions()
+  return true
+}
+
+function refreshFailCautions() {
+  setCaution("eng1", failures.eng1)
+  setCaution("eng2", failures.eng2)
+  setCaution("fire", failures.fire)
+  setCaution("hyd", failures.hyd)
+  setCaution("elec", failures.elec)
+  setCaution("gearjam", failures.gearJam)
+  setCaution("careng", failures.carEng)
+  setCaution("tire", failures.tire)
+  setCaution("brakes", failures.brakes)
+  refreshFailPanel()
+}
+
+function pickRandomFailure() {
+  const pool = playerIsCar() ? CAR_FAIL_KINDS : AIR_FAIL_KINDS
+  const open = pool.filter((k) => {
+    if (k === "eng1") return !failures.eng1
+    if (k === "eng2") return !failures.eng2
+    if (k === "fire") return !failures.fire
+    if (k === "hyd") return !failures.hyd
+    if (k === "elec") return !failures.elec
+    if (k === "gearJam") return !failures.gearJam && player?.def?.gear?.mode === "retract"
+    if (k === "carEng") return !failures.carEng
+    if (k === "tire") return !failures.tire
+    if (k === "brakes") return !failures.brakes
+    return true
+  })
+  if (!open.length) return null
+  return open[Math.floor(Math.random() * open.length)]
+}
+
+function practiceFailure() {
+  if (mode !== "fly" || outside || recovering) {
+    toast("Start flying or driving first, then tap Fail.")
+    return
+  }
+  if (failMode === "off" && !cheats.admin) {
+    toast("Failures are Off — tap On next to the throttle.")
+    return
+  }
+  const kind = pickRandomFailure()
+  if (!kind) {
+    toast("Every system is already failed. Tap Reset.")
+    return
+  }
+  triggerFailure(kind, { practice: true })
+}
+
+function tickFailures(dt) {
+  if (failMode === "off" || mode !== "fly" || outside || recovering) return
+  // Autopilot flights stay clean — random failures were nuking climbs mid-ALT bump.
+  if (ap.on && !playerIsCar()) return
+  failCooldown = Math.max(0, failCooldown - dt)
+  if (failCooldown > 0) return
+  // Only after you're really going — takeoff / cruise / drive.
+  const speed = velocity.length()
+  const agl = player ? Math.max(0, player.root.position.y - clearanceOf(player)) : 0
+  const eligible = playerIsCar()
+    ? speed > 8
+    : (!grounded && agl > 40 && speed > 40)
+  if (!eligible) return
+  failAcc += dt
+  const period = failMode === "hard" ? 18 : 45
+  if (failAcc < period) return
+  failAcc = 0
+  const chance = failMode === "hard" ? 0.55 : 0.28
+  if (Math.random() > chance) {
+    failCooldown = 8
+    return
+  }
+  const kind = pickRandomFailure()
+  if (kind) triggerFailure(kind)
+}
+
+function thrustFactor() {
+  let engines = Math.max(1, player?.def?.engines?.length || 2)
+  if (engines > 4) engines = 4
+  let live = engines
+  if (failures.eng1) live -= 1
+  if (failures.eng2) live -= 1
+  if (failures.fire) live = Math.max(0, live - 0.35)
+  let factor = THREE.MathUtils.clamp(live / engines, 0.15, 1)
+  if (cheats.turbo) factor *= 2
+  return factor
+}
+
+function controlFactor() {
+  return failures.hyd ? 0.42 : 1
+}
+
+function setFailMode(next) {
+  failMode = next
+  try { localStorage.setItem("tfs-fail-mode", failMode) } catch { /* ignore */ }
+  for (const btn of document.querySelectorAll("#fail-modes .fail-mode")) {
+    btn.classList.toggle("on", btn.dataset.fail === failMode)
+  }
+  const status = document.getElementById("fail-status")
+  if (status) {
+    status.textContent = failMode === "off"
+      ? "Off"
+      : failMode === "hard"
+        ? "Hard · tap Fail now"
+        : "On · tap Fail now"
+  }
+  refreshFailPanel()
+}
+
+function refreshFailPanel() {
+  const panel = document.getElementById("fail-panel")
+  if (panel) panel.hidden = mode !== "fly"
+  const extinguish = document.getElementById("fail-extinguish")
+  if (extinguish) extinguish.hidden = !(mode === "fly" && failures.fire)
+}
+
+function extinguishFire() {
+  if (!failures.fire) {
+    toast("No engine fire.")
+    return
+  }
+  failures.fire = false
+  failures.fireIndex = -1
+  systems.fireLeft = true
+  systems.fireRight = true
+  toast("Fire extinguished!")
+  beep(720, 0.1)
+  refreshFailCautions()
+  refreshFailPanel()
+}
 const parked = []
 
-/** Windshear / gust cells around Turbo Field (approach paths and coast). */
+/** Windshear / gust cells — kept off the runway climb-out so takeoff stays fair. */
 const SHEAR_ZONES = [
-  { x: 40, z: 900, r: 220, y0: 12, y1: 95, top: { x: 18, y: -14, z: 6 }, bot: { x: -22, y: 9, z: -4 } },
-  { x: -120, z: 1500, r: 260, y0: 25, y1: 140, top: { x: -16, y: -18, z: 10 }, bot: { x: 20, y: 12, z: -8 } },
-  { x: 280, z: 1700, r: 200, y0: 40, y1: 180, top: { x: 12, y: -12, z: -14 }, bot: { x: -10, y: 8, z: 16 } },
-  { x: 520, z: 400, r: 180, y0: 8, y1: 70, top: { x: 24, y: -10, z: 2 }, bot: { x: -18, y: 7, z: 4 } },
+  { x: 520, z: -600, r: 200, y0: 20, y1: 110, top: { x: 14, y: -10, z: 4 }, bot: { x: -12, y: 7, z: -3 } },
+  { x: -480, z: 2600, r: 240, y0: 40, y1: 160, top: { x: -12, y: -12, z: 8 }, bot: { x: 14, y: 8, z: -6 } },
+  { x: 720, z: 2200, r: 200, y0: 50, y1: 180, top: { x: 10, y: -10, z: -10 }, bot: { x: -8, y: 7, z: 12 } },
+  { x: 1100, z: 900, r: 180, y0: 25, y1: 100, top: { x: 16, y: -8, z: 2 }, bot: { x: -12, y: 6, z: 3 } },
 ]
 
 function sampleWind(position, out = windSample) {
@@ -543,20 +1427,44 @@ function renderWxPanel() {
 }
 
 async function restoreWeather() {
+  if (!weather) return
   let saved = "clear"
   try { saved = localStorage.getItem("tfs-weather") || "clear" } catch { /* ignore */ }
   if (saved === "live") {
-    try {
-      await weather.applyLive()
-    } catch {
-      weather.apply("clear")
-    }
-  } else if (weather.presets.some((item) => item.id === saved)) {
-    weather.apply(saved)
-  } else {
+    // Don't block hangar open on geolocation / network.
     weather.apply("clear")
+    refreshWxPanel()
+    weather.applyLive().then(() => refreshWxPanel()).catch(() => {
+      weather.apply("clear")
+      refreshWxPanel()
+    })
+    return
   }
+  if (weather.presets.some((item) => item.id === saved)) weather.apply(saved)
+  else weather.apply("clear")
   refreshWxPanel()
+}
+
+function yieldFrame() {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()))
+}
+
+async function ensureSimCore() {
+  if (world) return
+  boot.textContent = "Building airfield…"
+  await yieldFrame()
+  world = createWorld(scene)
+  weather = createWeatherController({ scene, hemi, sun, fill, world })
+  crashFx = createCrashFx(scene)
+  await yieldFrame()
+  // Fancy reflections after the hangar is usable — not on the critical path.
+  import("../node_modules/three/examples/jsm/environments/RoomEnvironment.js")
+    .then(({ RoomEnvironment }) => {
+      const pmrem = new THREE.PMREMGenerator(renderer)
+      scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
+      pmrem.dispose()
+    })
+    .catch(() => {})
 }
 
 function speakCaution(phrase) {
@@ -586,6 +1494,267 @@ function toast(text) {
   toastTimer = setTimeout(() => toastEl.classList.remove("show"), 2800)
 }
 
+const chatRoot = document.getElementById("chat")
+const chatPanel = document.getElementById("chat-panel")
+const chatLog = document.getElementById("chat-log")
+const chatInput = document.getElementById("chat-input")
+const chatHint = document.getElementById("chat-hint")
+const chatToggle = document.getElementById("chat-toggle")
+const chatBackdrop = document.getElementById("chat-backdrop")
+const chatBadge = document.getElementById("chat-badge")
+const chatEmojiBtn = document.getElementById("chat-emoji")
+const chatEmojiPanel = document.getElementById("chat-emoji-panel")
+const chatPop = document.getElementById("chat-pop")
+const MAX_CHAT_LINES = 48
+const CHAT_MAX_LEN = 140
+const MAX_CHAT_POPS = 4
+let chatUnread = 0
+let chatPopSeq = 0
+const recentChatKeys = new Set()
+
+function chatMessageKey(msg) {
+  return `${msg.id || "?"}|${msg.at || 0}|${msg.text || ""}`
+}
+
+function typingInField() {
+  const el = document.activeElement
+  if (!el) return false
+  const tag = el.tagName
+  return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable
+}
+
+function chatOpen() {
+  return Boolean(chatRoot && chatRoot.classList.contains("open"))
+}
+
+function syncChatButton(btn) {
+  if (!btn) return
+  btn.classList.toggle("on", chatOpen())
+  let badge = btn.querySelector(".chat-fly-badge")
+  if (chatUnread > 0 && mode === "fly" && !chatOpen()) {
+    if (!badge) {
+      badge = document.createElement("span")
+      badge.className = "chat-fly-badge"
+      btn.appendChild(badge)
+    }
+    badge.hidden = false
+    badge.textContent = chatUnread > 9 ? "9+" : String(chatUnread)
+  } else if (badge) {
+    badge.hidden = true
+  }
+}
+
+function syncChatChrome() {
+  if (!chatRoot) return
+  chatRoot.classList.toggle("in-flight", mode === "fly")
+  const flyChat = document.getElementById("fly-chat")
+  const failChat = document.getElementById("fail-chat")
+  if (failChat) failChat.hidden = mode !== "fly"
+  syncChatButton(flyChat)
+  syncChatButton(failChat)
+  if (chatBadge) {
+    if (chatUnread > 0 && !chatOpen() && mode !== "fly") {
+      chatBadge.hidden = false
+      chatBadge.textContent = chatUnread > 9 ? "9+" : String(chatUnread)
+    } else {
+      chatBadge.hidden = true
+    }
+  }
+}
+
+function updateChatViewportOffset() {
+  if (!chatRoot || !window.visualViewport) {
+    chatRoot?.style.setProperty("--chat-vv-bottom", "0px")
+    return
+  }
+  const vv = window.visualViewport
+  const occluded = Math.max(0, window.innerHeight - (vv.height + vv.offsetTop))
+  // Keep the composer above the soft keyboard on iPhone / iPad / Android.
+  chatRoot.style.setProperty("--chat-vv-bottom", `${Math.round(occluded)}px`)
+}
+
+function setEmojiPanelOpen(open) {
+  if (!chatEmojiPanel || !chatEmojiBtn) return
+  chatEmojiPanel.hidden = !open
+  chatEmojiBtn.setAttribute("aria-expanded", open ? "true" : "false")
+}
+
+function insertChatEmoji(emoji) {
+  if (!chatInput || !emoji) return
+  const value = chatInput.value || ""
+  const start = chatInput.selectionStart ?? value.length
+  const end = chatInput.selectionEnd ?? value.length
+  const next = `${value.slice(0, start)}${emoji}${value.slice(end)}`.slice(0, CHAT_MAX_LEN)
+  const caret = Math.min(start + emoji.length, next.length)
+  chatInput.value = next
+  chatInput.focus({ preventScroll: true })
+  chatInput.setSelectionRange(caret, caret)
+}
+
+function setChatOpen(open) {
+  if (!chatRoot || !chatPanel) return
+  chatRoot.classList.toggle("open", open)
+  chatPanel.hidden = !open
+  if (chatBackdrop) chatBackdrop.hidden = !open
+  if (!open) setEmojiPanelOpen(false)
+  if (open) {
+    chatUnread = 0
+    chatHint.textContent = net.online
+      ? "Friends on this Wi‑Fi can read this · Close when done"
+      : "Choose Multiplayer at start to chat on Wi‑Fi"
+    updateChatViewportOffset()
+    // Focus after layout so iOS/Android keyboards land on the input.
+    requestAnimationFrame(() => {
+      chatInput?.focus({ preventScroll: true })
+      updateChatViewportOffset()
+    })
+  } else if (document.activeElement === chatInput) {
+    chatInput.blur()
+    chatRoot.style.setProperty("--chat-vv-bottom", "0px")
+  }
+  syncChatChrome()
+}
+
+function appendChatLine({ name, text, you = false, system = false }) {
+  if (!chatLog) return
+  const line = document.createElement("div")
+  line.className = `chat-line${you ? " you" : ""}${system ? " system" : ""}`
+  if (system) {
+    line.textContent = text
+  } else {
+    const who = document.createElement("span")
+    who.className = "who"
+    who.textContent = name || "Pilot"
+    line.append(who, document.createTextNode(text))
+  }
+  chatLog.appendChild(line)
+  while (chatLog.children.length > MAX_CHAT_LINES) chatLog.firstChild.remove()
+  chatLog.scrollTop = chatLog.scrollHeight
+}
+
+function showChatPopup({ name, text, you = false }) {
+  if (!chatPop || !text) return
+  // Ensure the toast stack is visible even if a parent was hidden.
+  chatPop.hidden = false
+  const bubble = document.createElement("div")
+  bubble.className = `chat-pop-bubble${you ? " you" : ""}`
+  bubble.dataset.popId = String(++chatPopSeq)
+  const who = document.createElement("div")
+  who.className = "who"
+  who.textContent = you ? "You" : (name || "Pilot")
+  const body = document.createElement("div")
+  body.className = "msg"
+  body.textContent = text
+  bubble.append(who, body)
+  chatPop.appendChild(bubble)
+  while (chatPop.children.length > MAX_CHAT_POPS) {
+    chatPop.firstChild.remove()
+  }
+  requestAnimationFrame(() => bubble.classList.add("show"))
+  const holdMs = Math.min(8000, 4200 + Math.min(text.length, 100) * 32)
+  setTimeout(() => {
+    bubble.classList.add("out")
+    setTimeout(() => bubble.remove(), 240)
+  }, holdMs)
+}
+
+function pushChatMessage(msg) {
+  if (!msg?.text) return
+  const key = chatMessageKey(msg)
+  if (recentChatKeys.has(key)) return
+  recentChatKeys.add(key)
+  setTimeout(() => recentChatKeys.delete(key), 4000)
+
+  const you = Boolean(net.you && msg.id === net.you.id)
+  appendChatLine({ name: msg.name, text: msg.text, you })
+  // Big on-screen popup for every pilot — hangar or mid-flight.
+  showChatPopup({ name: msg.name, text: msg.text, you })
+  // Also float a bubble above the sender’s plane so nearby pilots see it in-world.
+  if (msg.id) showWorldChatBubble(msg.id, msg.text)
+  if (!chatOpen() && !you) {
+    chatUnread += 1
+    syncChatChrome()
+  }
+}
+
+function sendChatFromInput() {
+  const raw = chatInput?.value || ""
+  const text = raw.replace(/\s+/g, " ").trim()
+  if (!text) return
+  if (!net.online) {
+    appendChatLine({ text: "Multiplayer is off — go back and choose Multiplayer to chat.", system: true })
+    return
+  }
+  if (!net.sendChat(text)) {
+    appendChatLine({ text: "Could not send — reconnecting…", system: true })
+    return
+  }
+  if (chatInput) chatInput.value = ""
+  // Keep keyboard open on phones for quick back-and-forth.
+  chatInput?.focus({ preventScroll: true })
+}
+
+function showChatUi() {
+  if (chatRoot) chatRoot.hidden = false
+  syncChatChrome()
+}
+
+function bindChatUi() {
+  if (!chatRoot) return
+  chatToggle?.addEventListener("click", () => {
+    setChatOpen(true)
+  })
+  document.getElementById("fail-chat")?.addEventListener("click", () => {
+    setChatOpen(!chatOpen())
+  })
+  document.getElementById("chat-close")?.addEventListener("click", () => {
+    setChatOpen(false)
+  })
+  chatBackdrop?.addEventListener("click", () => {
+    setChatOpen(false)
+  })
+  document.getElementById("chat-form")?.addEventListener("submit", (event) => {
+    event.preventDefault()
+    setEmojiPanelOpen(false)
+    sendChatFromInput()
+  })
+  chatEmojiBtn?.addEventListener("click", (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    setEmojiPanelOpen(Boolean(chatEmojiPanel?.hidden))
+    chatInput?.focus({ preventScroll: true })
+  })
+  chatEmojiPanel?.addEventListener("click", (event) => {
+    const btn = event.target.closest("[data-emoji]")
+    if (!btn) return
+    event.preventDefault()
+    insertChatEmoji(btn.getAttribute("data-emoji"))
+  })
+  chatInput?.addEventListener("keydown", (event) => {
+    if (event.code === "Escape") {
+      event.preventDefault()
+      event.stopPropagation()
+      if (chatEmojiPanel && !chatEmojiPanel.hidden) {
+        setEmojiPanelOpen(false)
+        return
+      }
+      setChatOpen(false)
+    }
+  })
+  chatPanel?.addEventListener("pointerdown", (event) => {
+    if (!chatEmojiPanel || chatEmojiPanel.hidden) return
+    if (event.target === chatEmojiBtn || chatEmojiBtn?.contains(event.target)) return
+    if (chatEmojiPanel.contains(event.target)) return
+    setEmojiPanelOpen(false)
+  })
+  const onVv = () => {
+    if (chatOpen()) updateChatViewportOffset()
+  }
+  window.visualViewport?.addEventListener("resize", onVv)
+  window.visualViewport?.addEventListener("scroll", onVv)
+  window.addEventListener("resize", onVv)
+}
+
 function clearanceOf(craft) {
   if (craft.modelBellyClearance != null || craft.modelClearance != null) {
     const resting = craft.modelClearance ?? craft.def.gear.height
@@ -603,10 +1772,13 @@ function place(craft, x, z, yaw = 0) {
 function targetsFrom(craft) {
   const steps = [0, 0.34, 0.67, 1]
   const controls = craft.controls
+  if (isCar(craft.def)) {
+    return { gear: 1, flaps: 0, spoilers: 0, doors: 0, cargo: 0, nose: 0 }
+  }
   // Keep gear down on the ground — retracting on the runway drops the plane to belly height.
-  if (craft === player && grounded && craft.def.gear.mode === "retract") controls.gear = 1
+  if (craft === player && grounded && craft.def.gear?.mode === "retract") controls.gear = 1
   return {
-    gear: craft.def.gear.mode === "retract" ? controls.gear : 1,
+    gear: craft.def.gear?.mode === "retract" ? controls.gear : 1,
     flaps: craft.def.flaps ? steps[controls.flapStep] || 0 : 0,
     spoilers: craft.def.spoilers ? controls.spoilers : 0,
     doors: controls.doors,
@@ -621,7 +1793,12 @@ function toggle(craft, group) {
     if (!craft.def.flaps) return
     controls.flapStep = (controls.flapStep + 1) % 4
   } else if (group === "gear") {
-    if (craft.def.gear.mode !== "retract") return
+    if (craft.def.gear?.mode !== "retract") return
+    if (craft === player && failures.gearJam) {
+      toast("Gear jammed! Reset or land carefully.")
+      beep(180, 0.12, "square")
+      return
+    }
     if (craft === player && grounded && controls.gear > 0.5) {
       toast("Raise the gear after you take off.")
       return
@@ -707,10 +1884,93 @@ function refreshPartButtons() {
 }
 
 function hintLine(def) {
-  const bits = ["Stick or arrows steer", "Slide throttle", "B autopilot", "J J get out / jump", "Shift faster", "Q E rudder", "Space brake"]
+  const bits = isCar(def)
+    ? [
+        "W / Up gas",
+        "S / Down reverse",
+        "Mouse or A D steer",
+        "Slide throttle",
+        "Space brake",
+        "Shift faster",
+        "J J get out",
+      ]
+    : [
+        "Mouse steers (move to bank / pitch)",
+        "Stick or arrows also steer",
+        "Slide throttle",
+        "B autopilot",
+        "H home land",
+        "J J get out / jump",
+        "Shift faster",
+        "Q E rudder",
+        "Space brake",
+      ]
   for (const item of partButtons(def)) bits.push(`${item.key} ${item.label.toLowerCase()}`)
-  bits.push("C cycle cams", "Cockpit/Orbit: drag to look", "R reset", "Esc hangar")
+  bits.push(
+    "K practice failure",
+    "C cycle cams",
+    "V / Planes swap",
+    "[ ] prev/next",
+    "R reset",
+    "Esc hangar"
+  )
   return bits.join("  ·  ")
+}
+
+function mouseFlyAllowed() {
+  if (mode !== "fly" || !player || outside) return false
+  if (typingInField()) return false
+  if (chatOpen()) return false
+  // Orbit / cockpit look use drag for the camera — don't steal that.
+  if (isOrbitCam()) return false
+  if (isCockpitCam() && dragging) return false
+  return true
+}
+
+function curveMouseAxis(value, dead = 0.1) {
+  const a = Math.abs(value)
+  if (a <= dead) return 0
+  const t = (a - dead) / (1 - dead)
+  return Math.sign(value) * Math.pow(THREE.MathUtils.clamp(t, 0, 1), 1.25)
+}
+
+function updateMouseStick(clientX, clientY, pointerType = "mouse") {
+  if (!mouseFlyAllowed()) {
+    mouseStick.live = false
+    mouseStick.pitch = 0
+    mouseStick.roll = 0
+    return
+  }
+  // Touch has the on-screen stick; keep mouse/pen for desktop aim flying.
+  if (pointerType === "touch") {
+    mouseStick.live = false
+    return
+  }
+  // On-screen joystick wins while it's being held.
+  if (Math.abs(held.pitch) > 0.04 || Math.abs(held.roll) > 0.04) {
+    mouseStick.live = false
+    return
+  }
+  const rect = canvas.getBoundingClientRect()
+  if (rect.width < 8 || rect.height < 8) return
+  const nx = ((clientX - rect.left) / rect.width) * 2 - 1
+  const ny = ((clientY - rect.top) / rect.height) * 2 - 1
+  // Mouse right → bank / steer right; mouse up → pitch up (planes) or ignored for cars.
+  mouseStick.roll = THREE.MathUtils.clamp(curveMouseAxis(nx), -1, 1)
+  mouseStick.pitch = playerIsCar() ? 0 : THREE.MathUtils.clamp(curveMouseAxis(-ny), -1, 1)
+  mouseStick.live = true
+  if (!mouseFlyHintShown && (Math.abs(mouseStick.pitch) > 0.2 || Math.abs(mouseStick.roll) > 0.2)) {
+    mouseFlyHintShown = true
+    toast(playerIsCar()
+      ? "Mouse steers the car — gas with W / Up or the throttle"
+      : "Mouse steers the plane — move it to go anywhere")
+  }
+}
+
+function clearMouseStick() {
+  mouseStick.live = false
+  mouseStick.pitch = 0
+  mouseStick.roll = 0
 }
 
 function ensurePilot() {
@@ -750,17 +2010,77 @@ function ensurePilot() {
   return pilot
 }
 
+function boardReach(craft) {
+  if (!craft?.def) return 12
+  if (isCar(craft.def)) return Math.max(8, craft.def.length * 1.4)
+  return Math.max(22, craft.def.length * 0.55, craft.def.wing?.span * 0.35 || 0)
+}
+
+function boardableCandidates() {
+  const list = []
+  if (homeCraft?.root) list.push(homeCraft)
+  if (player?.root) list.push(player)
+  for (const car of worldCars) {
+    if (car?.root && car !== player) list.push(car)
+  }
+  return list
+}
+
+function nearestBoardable() {
+  if (!pilot) return null
+  let best = null
+  let bestDist = Infinity
+  for (const craft of boardableCandidates()) {
+    const dx = pilot.root.position.x - craft.root.position.x
+    const dz = pilot.root.position.z - craft.root.position.z
+    const dist = Math.hypot(dx, dz)
+    if (dist <= boardReach(craft) && dist < bestDist) {
+      best = craft
+      bestDist = dist
+    }
+  }
+  return best
+}
+
 function boardNearPlane() {
-  if (!player || !pilot) return false
-  // Generous reach so kids can hop back in from beside a big airliner.
-  const reach = Math.max(22, player.def.length * 0.55, player.def.wing?.span * 0.35 || 0)
-  const dx = pilot.root.position.x - player.root.position.x
-  const dz = pilot.root.position.z - player.root.position.z
-  return Math.hypot(dx, dz) <= reach
+  return !!nearestBoardable()
+}
+
+function adoptVehicle(craft) {
+  if (!craft) return
+  if (player && player !== craft && isCar(player.def) && !worldCars.includes(player)) {
+    worldCars.push(player)
+  }
+  if (player && player !== craft && !isCar(player.def)) homeCraft = player
+  if (isCar(craft.def)) {
+    const idx = worldCars.indexOf(craft)
+    if (idx >= 0) worldCars.splice(idx, 1)
+  } else {
+    homeCraft = null
+  }
+  player = craft
+  if (typeof window !== "undefined") {
+    window.__player = player
+    window.__camera = camera
+  }
+  const fleetIdx = FLEET.findIndex((d) => d.id === craft.def.id)
+  if (fleetIdx >= 0) selected = fleetIdx
+  document.getElementById("hud-name").textContent = isAirliner(craft.def)
+    ? craft.def.brand === "fedex"
+      ? `${craft.def.name} · FedEx Express`
+      : `${craft.def.name} · ${AIRLINE_NAME}`
+    : craft.def.name
+  document.getElementById("hints").textContent = hintLine(craft.def)
+  renderPartButtons()
+  refreshSysPanel()
+  syncAirlinePaintUI(craft.def)
+  if (!isCar(craft.def) && craft.controls.doors > 0.5) toggle(craft, "doors")
+  craft.setCockpit(cameraMode === COCKPIT_CAM && !isCar(craft.def))
 }
 
 function enterPlane({ quiet = false } = {}) {
   if (!outside) return
+  const target = nearestBoardable() || player
   outside = false
   chuteOpen = false
   pilotVel.set(0, 0, 0)
@@ -768,14 +2088,16 @@ function enterPlane({ quiet = false } = {}) {
     pilot.chute.visible = false
     pilot.root.visible = false
   }
-  if (player) {
-    player.setCockpit(cameraMode === COCKPIT_CAM)
-    if (player.controls.doors > 0.5) toggle(player, "doors")
-  }
+  adoptVehicle(target)
+  systems.parking = false
+  throttle = 0
+  velocity.set(0, 0, 0)
   snapCam = true
   refreshFlyActions()
   if (!quiet) {
-    toast("Back in the plane! Tap Jump twice to get out.")
+    toast(isCar(target.def)
+      ? `You're driving the ${target.def.name}! Tap Jump twice to get out.`
+      : "Back in the plane! Tap Jump twice to get out.")
     beep(720, 0.08)
     setTimeout(() => beep(880, 0.1), 70)
   }
@@ -785,24 +2107,30 @@ function exitPlane() {
   if (mode !== "fly" || !player || recovering || outside) return
   const clearance = clearanceOf(player)
   const agl = player.root.position.y - clearance
-  const jumping = !grounded || agl > 5
+  const drivingCar = playerIsCar()
+  const jumping = !drivingCar && (!grounded || agl > 5)
   const exitVel = velocity.clone()
 
   if (ap.on) disengageAp()
   throttle = 0
   velocity.set(0, 0, 0)
   systems.parking = true
-  if (player.controls.doors < 0.5) toggle(player, "doors")
+  if (!drivingCar && player.controls.doors < 0.5) toggle(player, "doors")
   player.setCockpit(false)
 
+  if (drivingCar && !worldCars.includes(player)) worldCars.push(player)
+  if (!drivingCar) homeCraft = player
+
   const avatar = ensurePilot()
-  const side = new THREE.Vector3(-Math.max(2.8, player.def.radius * 1.35), 0, player.seat?.z ?? 0)
+  const sideOff = drivingCar
+    ? Math.max(2.2, player.def.width * 0.7)
+    : Math.max(2.8, player.def.radius * 1.35)
+  const side = new THREE.Vector3(-sideOff, 0, player.seat?.z ?? 0)
   side.applyQuaternion(player.root.quaternion)
   avatar.root.position.copy(player.root.position).add(side)
   avatar.root.quaternion.copy(player.root.quaternion)
   avatar.root.rotation.x = 0
   avatar.root.rotation.z = 0
-  // First-person: hide the body so we look through the eyes.
   avatar.body.visible = false
   avatar.head.visible = false
   avatar.root.visible = true
@@ -819,14 +2147,16 @@ function exitPlane() {
     avatar.chute.visible = true
     avatar.root.position.y = Math.max(player.root.position.y - 1.2, clearance + 2)
     pilotVel.set(exitVel.x * 0.4, Math.min(exitVel.y, -1.5), exitVel.z * 0.4)
-    toast("You jumped out! Drag to look, stick to steer. Tap Board twice by the plane to climb in.")
+    toast("You jumped out! Walk to a plane, then Board twice.")
     beep(320, 0.12, "triangle")
   } else {
     chuteOpen = false
     avatar.chute.visible = false
     avatar.root.position.y = 0
     pilotVel.set(0, 0, 0)
-    toast("You stepped out. Drag to look, walk with the stick. Hold Run, then tap Get in twice by the door.")
+    toast(drivingCar
+      ? "You left the craft. Walk to a plane, then Get in twice."
+      : "You stepped out. Walk to a plane, then Get in twice.")
     beep(480, 0.08)
   }
   refreshFlyActions()
@@ -835,12 +2165,13 @@ function exitPlane() {
 function toggleExit() {
   if (mode !== "fly" || recovering) return
   if (outside) {
-    if (chuteOpen && pilot && pilot.root.position.y > 4 && !boardNearPlane()) {
-      toast("Land first, or float closer to the plane, then press J twice.")
+    const near = nearestBoardable()
+    if (chuteOpen && pilot && pilot.root.position.y > 4 && !near) {
+      toast("Land first, or float closer to a plane, then press J twice.")
       return
     }
-    if (!boardNearPlane()) {
-      toast("Walk closer to the plane, then press J twice.")
+    if (!near) {
+      toast("Walk closer to a plane, then press J twice.")
       beep(220, 0.08, "square")
       return
     }
@@ -925,9 +2256,116 @@ function stepOutside(dt) {
     pilot.root.rotation.z = 0
   }
 
-  // Keep the parked plane still while you're out.
+  // Keep the parked vehicle still while you're out.
   velocity.set(0, 0, 0)
   throttle = 0
+}
+
+function stepDrive(dt) {
+  const drive = player.def.drive
+  readStick()
+
+  // Stick forward / W / Up = gas. Stick back / S / Down = brake or reverse.
+  // Throttle slider and Shift still work as cruise power.
+  if (held.throttle > 0 || keys.has("ShiftLeft") || keys.has("ShiftRight")) throttle += dt * 0.7
+  if (held.throttle < 0 || keys.has("ControlLeft") || keys.has("ControlRight")) throttle -= dt * 0.7
+  if (keys.has("KeyX")) throttle = 1
+  if (keys.has("KeyZ")) throttle = 0
+  if (stick.pitch > 0.08) throttle = Math.max(throttle, stick.pitch)
+  if (stick.pitch < -0.08) throttle = Math.min(throttle, 1 + stick.pitch)
+  throttle = THREE.MathUtils.clamp(throttle, 0, 1)
+
+  // Gas cancels parking brake so cars always feel ready to roll.
+  if (throttle > 0.05 || stick.pitch > 0.1) systems.parking = false
+
+  const onPavement = world.onDrivable?.(player.root.position.x, player.root.position.z)
+    ?? world.onRoad?.(player.root.position.x, player.root.position.z)
+    ?? true
+  const maxSpeed = drive.maxSpeed * (onPavement ? 1 : drive.offRoadMax)
+  const friction = onPavement ? drive.friction : drive.offRoadFriction
+
+  forward.set(0, 0, 1).applyQuaternion(player.root.quaternion)
+  const along = velocity.dot(forward)
+  const pedalBrake = held.brake > 0 || keys.has("Space") || !!systems.parking
+  const wantReverse = stick.pitch < -0.25 && along < 2.5 && !pedalBrake
+
+  if (pedalBrake) {
+    const spd = velocity.length()
+    const brakePower = failures.brakes ? 0.22 : 1.35
+    if (spd > 0.05) {
+      const cut = Math.min(spd, drive.brake * brakePower * dt)
+      velocity.multiplyScalar(Math.max(0, (spd - cut) / spd))
+    } else if (!failures.brakes) velocity.set(0, 0, 0)
+    throttle = Math.max(0, throttle - dt * 1.4)
+  } else if (wantReverse) {
+    const revPower = Math.min(1, -stick.pitch) * drive.accel * 0.55
+    velocity.addScaledVector(forward, -revPower * dt)
+    const revMax = maxSpeed * 0.35
+    if (velocity.length() > revMax) velocity.setLength(revMax)
+  } else if (throttle > 0.02) {
+    const power = (failures.carEng ? 0.35 : 1) * (cheats.turbo ? 2 : 1)
+    velocity.addScaledVector(forward, drive.accel * 1.25 * throttle * power * dt)
+  }
+
+  const speed = velocity.length()
+  // Light coasting drag so throttle actually builds speed.
+  if (speed > 0.01 && !wantReverse) {
+    const coast = throttle > 0.15 ? 0.55 : 1
+    const drag = Math.max(0, 1 - friction * coast * dt * 0.22 * (failures.carEng ? 1.35 : 1))
+    velocity.multiplyScalar(drag)
+  }
+  const top = maxSpeed * (failures.carEng ? 0.55 : 1) * (failures.tire ? 0.75 : 1) * (cheats.turbo ? 2 : 1)
+  if (!wantReverse && velocity.length() > top) velocity.setLength(top)
+
+  // Steer more eagerly at low speed so parking-lot turns feel good.
+  const steerInput = stick.yaw + stick.roll + (failures.tire ? failures.tireSide * 0.35 : 0)
+  const turnAuth = THREE.MathUtils.clamp(0.35 + speed / 6, 0.4, 1.35)
+  player.root.rotateY(-steerInput * drive.steer * 1.15 * turnAuth * dt)
+  player.root.rotation.x = 0
+  player.root.rotation.z = THREE.MathUtils.clamp(-steerInput * 0.04 * Math.min(1, speed / 20), -0.08, 0.08)
+
+  // Flat tire pulls the car; brake failure weakens Space.
+  if (failures.tire && speed > 1) {
+    velocity.addScaledVector(right.set(1, 0, 0).applyQuaternion(player.root.quaternion), failures.tireSide * 2.8 * dt)
+  }
+  tickFailures(dt)
+  refreshFailCautions()
+
+  if (speed > 0.15) {
+    forward.set(0, 0, 1).applyQuaternion(player.root.quaternion)
+    const signed = velocity.dot(forward) >= 0 ? 1 : -1
+    velocity.copy(forward).multiplyScalar(signed * velocity.length())
+  }
+
+  player.root.position.x += velocity.x * dt
+  player.root.position.z += velocity.z * dt
+  player.root.position.y = clearanceOf(player)
+  grounded = true
+  distance += velocity.length() * dt
+
+  const hit = obstacleAt(player.root.position)
+  if (hit) {
+    const dx = player.root.position.x - hit.x
+    const dz = player.root.position.z - hit.z
+    const dist = Math.hypot(dx, dz) || 1
+    const push = (hit.r || 4) + 1.4 - dist
+    if (push > 0) {
+      player.root.position.x += (dx / dist) * push
+      player.root.position.z += (dz / dist) * push
+      if (cheats.crashPhysics && speed > 18) {
+        crash(crashMessage(hit))
+        return
+      }
+      velocity.multiplyScalar(0.15)
+    }
+  }
+
+  forward.set(0, 0, 1).applyQuaternion(player.root.quaternion)
+  up.set(0, 1, 0)
+  right.set(1, 0, 0).applyQuaternion(player.root.quaternion)
+  flightInfo.bank = 0
+  flightInfo.aoa = 0
+  flightInfo.warnings = []
 }
 
 function airlineColorsFromInputs() {
@@ -943,56 +2381,260 @@ function syncAirlinePaintUI(def) {
   const show = isAirliner(def)
   panel.hidden = !show
   if (!show) return
-  const colors = loadAirlineColors()
+  const locked = def.brand === "fedex" || def.lockedLivery === "fedex"
+  const colors = locked
+    ? { primary: "#4D148C", secondary: "#FF6600", fuselage: "#f7f7f5" }
+    : loadAirlineColors()
   document.getElementById("airline-primary").value = colors.primary
   document.getElementById("airline-secondary").value = colors.secondary
   document.getElementById("airline-fuselage").value = colors.fuselage
+  panel.classList.toggle("locked-fedex", locked)
+}
+
+function hangarSwatch(def, colors = loadAirlineColors()) {
+  if (def.brand === "fedex" || def.lockedLivery === "fedex") {
+    return "linear-gradient(135deg, #f7f7f5 0%, #4D148C 55%, #FF6600 100%)"
+  }
+  if (isAirliner(def)) {
+    return `linear-gradient(135deg, ${colors.fuselage}, ${colors.primary})`
+  }
+  return `linear-gradient(135deg, ${def.body}, ${def.accent})`
 }
 
 function repaintAirlineFleet(colors) {
   saveAirlineColors(colors)
-  if (player) applyDemiAirline(player, colors)
+  if (player && !isCar(player.def)) applyDemiAirline(player, colors)
   for (const craft of parked) applyDemiAirline(craft, colors)
   for (const button of buttons) {
-    const def = PLANES[Number(button.dataset.index)]
+    const def = FLEET[Number(button.dataset.index)]
     if (!isAirliner(def)) continue
-    button.querySelector(".swatch").style.background =
-      `linear-gradient(135deg, ${colors.fuselage}, ${colors.primary})`
+    button.querySelector(".swatch").style.background = hangarSwatch(def, colors)
   }
 }
 
+let selectToken = 0
+
 function selectPlane(index) {
+  void selectVehicle(index)
+}
+
+async function selectVehicle(index) {
   if (index === selected && player) return
+  const def = FLEET[index]
+  if (!def) return
+  const token = ++selectToken
   selected = index
-  const def = PLANES[index]
-  if (player) {
-    scene.remove(player.root)
-    disposeCraft(player)
-  }
-  player = createAircraft(def)
-  scene.add(player.root)
-  if (typeof window !== "undefined") window.__player = player
-  place(player, PAD.x, PAD.z, 0.4)
-  orbitDist = Math.max(def.length * 1.15, def.wing.span * 0.72) + 8
-  snapCam = true
   document.getElementById("plane-name").textContent =
-    isAirliner(def) ? `${def.name} · ${AIRLINE_NAME}` : def.name
+    def.brand === "fedex"
+      ? `${def.name} · FedEx Express`
+      : isAirliner(def) ? `${def.name} · ${AIRLINE_NAME}` : def.name
   document.getElementById("plane-role").textContent = def.role
   document.getElementById("plane-blurb").textContent = def.blurb
   document.getElementById("plane-parts").textContent = partSummary(def)
-  document.getElementById("fly-btn").textContent = `Fly the ${def.name}`
+  document.getElementById("fly-btn").textContent = `${actionVerb(def)} the ${def.name}`
   syncAirlinePaintUI(def)
+  if (def.id === "md11") {
+    // ¾ front-side view so the FedEx titles + #3 inlet read clearly.
+    orbitYaw = 0.95
+    orbitPitch = 0.18
+    orbitDist = Math.max(def.length * 1.05, def.wing.span * 0.7) + 10
+    orbitAuto = false
+  }
   for (const button of buttons) button.classList.toggle("active", Number(button.dataset.index) === index)
   const active = buttons.find((button) => Number(button.dataset.index) === index)
   active?.scrollIntoView({ block: "nearest" })
+
+  // Cars are procedural — only aircraft GLBs need a hangar load wait.
+  if (!isCar(def) && !isModelCached(def.id)) {
+    boot.hidden = false
+    boot.textContent = `Loading ${def.name}…`
+    await ensureModel(def.id)
+    if (token !== selectToken) return
+    boot.hidden = true
+  }
+
+  if (homeCraft && homeCraft !== player) {
+    scene.remove(homeCraft.root)
+    disposeVehicle(homeCraft)
+  }
+  homeCraft = null
+  if (player) {
+    const wi = worldCars.indexOf(player)
+    if (wi >= 0) worldCars.splice(wi, 1)
+    scene.remove(player.root)
+    disposeVehicle(player)
+  }
+  player = createVehicle(def)
+  scene.add(player.root)
+  if (typeof window !== "undefined") window.__player = player
+  if (isCar(def)) {
+    place(player, PAD.x - 40, PAD.z + 40, 0.4)
+    orbitDist = Math.max(def.length * 3.2, 14)
+  } else {
+    place(player, PAD.x, PAD.z, 0.4)
+    orbitDist = Math.max(def.length * 1.15, def.wing.span * 0.72) + 8
+  }
+  snapCam = true
 }
 
 function selectRelative(step) {
-  const next = (selected + step + PLANES.length) % PLANES.length
-  selectPlane(next)
+  const next = (selected + step + FLEET.length) % FLEET.length
+  void selectVehicle(next)
+}
+
+function swapPanelOpen() {
+  const panel = document.getElementById("swap-panel")
+  return Boolean(panel && !panel.hidden)
+}
+
+function setSwapPanelOpen(open) {
+  const panel = document.getElementById("swap-panel")
+  if (!panel) return
+  panel.hidden = !open
+  if (open) {
+    refreshSwapList()
+    if (chatOpen()) setChatOpen(false)
+  }
+}
+
+function refreshSwapList() {
+  const list = document.getElementById("swap-list")
+  if (!list) return
+  list.innerHTML = ""
+  FLEET.forEach((def, index) => {
+    const button = document.createElement("button")
+    button.type = "button"
+    button.className = "swap-item"
+    if (index === selected) button.classList.add("active")
+    button.innerHTML = `<span class="swap-name">${def.name}</span><span class="swap-role">${def.role || ""}</span>`
+    button.addEventListener("click", () => {
+      void changePlaneInFlight(index)
+    })
+    list.appendChild(button)
+  })
+  list.querySelector(".swap-item.active")?.scrollIntoView({ block: "nearest" })
+}
+
+/**
+ * Swap aircraft mid-flight / mid-drive while keeping world pose and speed.
+ */
+async function changePlaneInFlight(index) {
+  if (mode !== "fly" || recovering || outside) {
+    toast("Start flying first, then tap Planes.")
+    return
+  }
+  const def = FLEET[index]
+  if (!def || !player) return
+  if (index === selected) {
+    setSwapPanelOpen(false)
+    return
+  }
+
+  const token = ++selectToken
+  const prev = player
+  const pos = prev.root.position.clone()
+  const quat = prev.root.quaternion.clone()
+  const vel = velocity.clone()
+  const thr = throttle
+  const gearUp = (prev.controls?.gear ?? 1) > 0.5
+  const lightsOn = (prev.controls?.lights ?? 0) > 0.5
+  const wasAir = wasAirborne
+  const agl = Math.max(0, pos.y - clearanceOf(prev))
+
+  selected = index
+  for (const button of buttons) button.classList.toggle("active", Number(button.dataset.index) === index)
+
+  if (!isCar(def) && !isModelCached(def.id)) {
+    boot.hidden = false
+    boot.textContent = `Loading ${def.name}…`
+    await ensureModel(def.id)
+    if (token !== selectToken) return
+    boot.hidden = true
+  }
+  if (token !== selectToken) return
+
+  if (homeCraft && homeCraft !== prev) {
+    scene.remove(homeCraft.root)
+    disposeVehicle(homeCraft)
+  }
+  homeCraft = null
+  const wi = worldCars.indexOf(prev)
+  if (wi >= 0) worldCars.splice(wi, 1)
+  scene.remove(prev.root)
+  disposeVehicle(prev)
+
+  player = createVehicle(def)
+  scene.add(player.root)
+  if (typeof window !== "undefined") window.__player = player
+  if (isCar(def) && !worldCars.includes(player)) worldCars.push(player)
+
+  player.root.position.copy(pos)
+  player.root.quaternion.copy(quat)
+  player.root.updateMatrixWorld(true)
+  // Keep height above ground; new gear sit height may differ.
+  const nextClear = clearanceOf(player)
+  player.root.position.y = Math.max(nextClear + 0.02, nextClear + agl)
+  velocity.copy(vel)
+  // Soft-cap ridiculous speed jumps when swapping a jet for a Cub, etc.
+  const maxSpd = isCar(def)
+    ? Math.max(28, def.drive?.maxSpeed || 35)
+    : Math.max(def.flight?.cruise || 55, (def.flight?.stall || 30) * 2.4)
+  if (velocity.length() > maxSpd) velocity.setLength(maxSpd)
+  throttle = THREE.MathUtils.clamp(thr, 0, 1)
+  takeoffBoost = 0
+  wasAirborne = wasAir
+  grounded = player.root.position.y <= clearanceOf(player) + 0.12
+
+  resetControls(player)
+  if (!isCar(def)) {
+    // Stay gear-up if you were flying clean; gear-down on the ground.
+    const wantGear = grounded || !gearUp ? 1 : 0
+    player.controls.gear = wantGear
+    for (const part of player.parts) {
+      if (part.group !== "gear") continue
+      part.t = wantGear
+      part.dest = wantGear
+      part.apply(part.t)
+    }
+    player.gearT = wantGear
+  }
+  if (lightsOn) {
+    player.controls.lights = 1
+    player.setLights?.(true)
+  }
+  player.setCockpit(cameraMode === COCKPIT_CAM && !isCar(def))
+
+  document.getElementById("hud-name").textContent =
+    def.brand === "fedex"
+      ? `${def.name} · FedEx Express`
+      : isAirliner(def) ? `${def.name} · ${AIRLINE_NAME}` : def.name
+  document.getElementById("hints").textContent = hintLine(def)
+  document.getElementById("plane-name").textContent =
+    def.brand === "fedex"
+      ? `${def.name} · FedEx Express`
+      : isAirliner(def) ? `${def.name} · ${AIRLINE_NAME}` : def.name
+  document.getElementById("plane-role").textContent = def.role
+  document.getElementById("plane-blurb").textContent = def.blurb
+  document.getElementById("plane-parts").textContent = partSummary(def)
+  document.getElementById("fly-btn").textContent = `${actionVerb(def)} the ${def.name}`
+  syncAirlinePaintUI(def)
+  renderPartButtons()
+  refreshSysPanel()
+  refreshFlyActions()
+  refreshApPanel()
+  refreshSwapList()
+  setSwapPanelOpen(false)
+  snapCam = true
+  netSyncAcc = 99
+  toast(isCar(def) ? `Now driving the ${def.name}` : `Now flying the ${def.name}`)
 }
 
 function resetControls(craft) {
+  if (isCar(craft.def)) {
+    craft.controls = { lights: 0 }
+    craft.setLights(false)
+    return
+  }
   craft.controls = { gear: 1, flapStep: 0, spoilers: 0, doors: 0, cargo: 0, nose: 0, lights: 0 }
   for (const part of craft.parts) {
     const open = part.group === "gear" ? 1 : 0
@@ -1019,22 +2661,273 @@ function currentAltM() {
   return Math.max(0, player.root.position.y - clearanceOf(player))
 }
 
+function clearHomeLand() {
+  ap.land = false
+  ap.landPhase = null
+  ap.landHdg = 0
+  ap.landFix = null
+  ap.landThresh = null
+}
+
 function disengageAp(reason) {
-  if (!ap.on) return
+  if (!ap.on) {
+    clearHomeLand()
+    return
+  }
   ap.on = false
+  clearHomeLand()
   refreshApPanel()
   if (reason) toast(reason)
 }
 
 function captureApTargets() {
+  if (playerIsCar() || !player.def.flight) return
   forward.set(0, 0, 1).applyQuaternion(player.root.quaternion)
   ap.targetHdg = Math.round(currentHeadingDeg())
   ap.targetAlt = Math.max(30, Math.round(currentAltM()))
-  ap.targetSpd = Math.max(player.def.flight.stall * 1.2, velocity.length() > 8 ? velocity.length() : player.def.flight.cruise * 0.85)
+  const flight = player.def.flight
+  // Never engage with a near-stall speed bug — climb needs a real cruise margin.
+  ap.targetSpd = Math.max(
+    flight.stall * 1.55,
+    flight.cruise * 0.78,
+    velocity.length() > 8 ? velocity.length() : flight.cruise * 0.85
+  )
+}
+
+/** Clean the airframe so AP climb isn't fighting gear/flap drag. */
+function configureApClimb() {
+  if (!player || playerIsCar()) return
+  if (player.def.gear?.mode === "retract" && player.controls.gear > 0.5) {
+    player.controls.gear = 0
+  }
+  if (player.def.flaps && player.controls.flapStep > 0) player.controls.flapStep = 0
+  if (player.def.spoilers) player.controls.spoilers = 0
+}
+
+/** Gear and flaps for home-airport approach. */
+function configureApLanding(fullFlaps = false) {
+  if (!player || playerIsCar()) return
+  if (player.def.gear?.mode === "retract" && player.controls.gear < 0.5) {
+    if (failures.gearJam) {
+      /* leave gear as-is */
+    } else {
+      player.controls.gear = 1
+    }
+  }
+  if (player.def.flaps) {
+    const want = fullFlaps ? 3 : 2
+    if (player.controls.flapStep < want) player.controls.flapStep = want
+  }
+  if (player.def.spoilers) player.controls.spoilers = 0
+}
+
+function bearingToDeg(fromX, fromZ, toX, toZ) {
+  return (THREE.MathUtils.radToDeg(Math.atan2(toX - fromX, toZ - fromZ)) + 360) % 360
+}
+
+function homeLandPlanForHdg(landHdg) {
+  const rx = RUNWAY.x
+  if (landHdg < 90 || landHdg > 270) {
+    return {
+      landHdg: 0,
+      threshX: rx,
+      threshZ: RUNWAY.z0,
+      fixX: rx,
+      fixZ: RUNWAY.z0 - LAND_FIX_DIST,
+    }
+  }
+  return {
+    landHdg: 180,
+    threshX: rx,
+    threshZ: RUNWAY.z1,
+    fixX: rx,
+    fixZ: RUNWAY.z1 + LAND_FIX_DIST,
+  }
+}
+
+/** Prefer the approach end that keeps us from having to overfly the strip first. */
+function computeHomeLandPlan() {
+  const px = player.root.position.x
+  const pz = player.root.position.z
+  const south = homeLandPlanForHdg(0)
+  const north = homeLandPlanForHdg(180)
+  const alongSouth = south.threshZ - pz
+  const alongNorth = pz - north.threshZ
+  const score = (along, fix) => {
+    const onSide = along > 200 ? 0 : 4000
+    const distFix = Math.hypot(px - fix.x, pz - fix.z)
+    return onSide + distFix
+  }
+  return score(alongSouth, south.fix) <= score(alongNorth, north.fix) ? south : north
+}
+
+function applyHomeLandPlan(plan) {
+  ap.landHdg = plan.landHdg
+  ap.landFix = { x: plan.fixX, z: plan.fixZ }
+  ap.landThresh = { x: plan.threshX, z: plan.threshZ }
+}
+
+/** Signed distance remaining to threshold along the landing direction. Positive = before threshold. */
+function alongToThreshold(pz, threshZ, landHdg) {
+  const alongSign = Math.cos(THREE.MathUtils.degToRad(landHdg))
+  return (threshZ - pz) * alongSign
+}
+
+function runwayCrossTrack(px) {
+  return px - RUNWAY.x
+}
+
+function runwayCrossTrackCorr(px, landHdg) {
+  const xtk = runwayCrossTrack(px)
+  const alongSign = Math.cos(THREE.MathUtils.degToRad(landHdg))
+  return THREE.MathUtils.clamp(-xtk * alongSign * 0.09, -28, 28)
+}
+
+function setHomeLandPhase(next, message) {
+  if (ap.landPhase === next) return
+  ap.landPhase = next
+  refreshApPanel()
+  if (message) toast(message)
+}
+
+function updateHomeLand(_dt, speed) {
+  if (!ap.land || !player?.def?.flight || !ap.landFix || !ap.landThresh) return
+  const flight = player.def.flight
+  const px = player.root.position.x
+  const pz = player.root.position.z
+  const alt = currentAltM()
+  const fix = ap.landFix
+  const thresh = ap.landThresh
+  const distFix = Math.hypot(px - fix.x, pz - fix.z)
+  const along = alongToThreshold(pz, thresh.z, ap.landHdg)
+  const xtk = Math.abs(runwayCrossTrack(px))
+  const approachSpd = Math.max(flight.stall * 1.35, flight.cruise * 0.42, 22)
+  const hdgCorr = runwayCrossTrackCorr(px, ap.landHdg)
+  const hdg = currentHeadingDeg()
+  const hdgErr = Math.abs(((ap.landHdg - hdg + 540) % 360) - 180)
+
+  // Overflew the strip — reverse approach and go back to the fix.
+  if (along < -250 && alt > 35 && ap.landPhase !== "nav") {
+    applyHomeLandPlan(homeLandPlanForHdg((ap.landHdg + 180) % 360))
+    setHomeLandPhase("nav", "Autoland · circling for the other end")
+    return
+  }
+
+  if (ap.landPhase === "nav") {
+    configureApClimb()
+    ap.targetHdg = bearingToDeg(px, pz, fix.x, fix.z)
+    ap.targetAlt = LAND_NAV_ALT
+    ap.targetSpd = Math.max(flight.stall * 1.6, flight.cruise * 0.85)
+    // Only leave nav once we actually reach the approach fix (not merely near the field).
+    const atFix = distFix < 420
+    const established =
+      along > 600
+      && along < LAND_FIX_DIST + 200
+      && xtk < 90
+      && hdgErr < 25
+      && distFix < 900
+    if (atFix || established) {
+      setHomeLandPhase("align", "Autoland · aligning final")
+    }
+    return
+  }
+
+  if (ap.landPhase === "align") {
+    configureApLanding(false)
+    // Steer toward a point on centerline ahead of the threshold so we don't cut the corner.
+    const captureAlong = Math.max(900, Math.min(along, 2200))
+    const alongSign = Math.cos(THREE.MathUtils.degToRad(ap.landHdg))
+    const aimZ = thresh.z - captureAlong * alongSign
+    ap.targetHdg = bearingToDeg(px, pz, RUNWAY.x, aimZ)
+    ap.targetAlt = LAND_ALIGN_ALT
+    ap.targetSpd = Math.max(approachSpd * 1.25, flight.stall * 1.45)
+    if (along < 2100 && along > 350 && xtk < 140 && hdgErr < 40) {
+      setHomeLandPhase("final", "Autoland · final approach")
+    } else if (along < 700 && along > 0) {
+      setHomeLandPhase("final", "Autoland · final approach")
+    }
+    return
+  }
+
+  if (ap.landPhase === "final") {
+    configureApLanding(true)
+    const toTouch = Math.max(0, along - 180)
+    const glideAlt = Math.max(5, toTouch * LAND_GLIDE_TAN)
+    ap.targetHdg = (ap.landHdg + hdgCorr + 360) % 360
+    ap.targetAlt = glideAlt
+    ap.targetSpd = approachSpd
+    if (alt < 28 && along < 550 && along > -80) {
+      setHomeLandPhase("flare", "Autoland · flare")
+    }
+    return
+  }
+
+  if (ap.landPhase === "flare") {
+    configureApLanding(true)
+    ap.targetHdg = (ap.landHdg + hdgCorr * 0.35 + 360) % 360
+    ap.targetAlt = 0
+    ap.targetSpd = Math.max(flight.stall * 1.12, 16)
+  }
+}
+
+function handleHomeLandRollout(dt, speed) {
+  if (ap.landPhase !== "rollout") {
+    ap.landPhase = "rollout"
+    const name = world.airportName || "home airport"
+    toast(`Landed at ${name}`)
+    beep(880, 0.1)
+    setTimeout(() => beep(1100, 0.12), 100)
+  }
+  throttle = 0
+  braking = true
+  if (player?.def?.spoilers) player.controls.spoilers = 1
+  if (speed < 1.8) {
+    systems.parking = true
+    const name = world.airportName || "home airport"
+    disengageAp(`Parked at ${name}`)
+  }
+}
+
+function toggleHomeLand() {
+  if (mode !== "fly" || !player || playerIsCar()) return
+  if (failures.elec) {
+    toast("Electrical failure — autopilot unavailable.")
+    beep(200, 0.1, "square")
+    return
+  }
+  if (ap.land) {
+    clearHomeLand()
+    refreshApPanel()
+    toast("Autoland cancelled.")
+    beep(420, 0.08)
+    return
+  }
+  if (grounded) {
+    toast("Take off first, then engage home land.")
+    return
+  }
+  applyHomeLandPlan(computeHomeLandPlan())
+  ap.land = true
+  ap.landPhase = "nav"
+  ap.on = true
+  ap.hdg = true
+  ap.alt = true
+  ap.spd = true
+  configureApClimb()
+  updateHomeLand(0.016, velocity.length())
+  refreshApPanel()
+  toast(`Autoland → ${world.airportName || "home airport"} · flying to approach`)
+  beep(740, 0.08)
+  setTimeout(() => beep(980, 0.1), 90)
 }
 
 function toggleAutopilot() {
-  if (mode !== "fly" || !player) return
+  if (mode !== "fly" || !player || playerIsCar()) return
+  if (failures.elec) {
+    toast("Electrical failure — autopilot unavailable.")
+    beep(200, 0.1, "square")
+    return
+  }
   if (ap.on) {
     disengageAp("Autopilot off.")
     return
@@ -1043,7 +2936,9 @@ function toggleAutopilot() {
     toast("Take off first, then turn on autopilot.")
     return
   }
+  clearHomeLand()
   captureApTargets()
+  configureApClimb()
   ap.on = true
   ap.hdg = true
   ap.alt = true
@@ -1059,10 +2954,20 @@ function adjustAp(kind, dir) {
     ap.targetHdg = (ap.targetHdg + dir * 5 + 360) % 360
     ap.hdg = true
   } else if (kind === "alt") {
-    ap.targetAlt = THREE.MathUtils.clamp(ap.targetAlt + dir * 50, 30, 4000)
+    // Small steps — big ALT jumps were commanding climbs the airframe couldn't sustain.
+    ap.targetAlt = THREE.MathUtils.clamp(ap.targetAlt + dir * 25, 30, 4000)
     ap.alt = true
+    if (dir > 0 && player?.def?.flight) {
+      const climbSpd = Math.max(player.def.flight.stall * 1.65, player.def.flight.cruise * 0.88)
+      ap.targetSpd = Math.max(ap.targetSpd, climbSpd)
+      ap.spd = true
+      configureApClimb()
+      throttle = Math.max(throttle, 0.9)
+    }
   }
   if (!ap.on && mode === "fly" && !grounded) {
+    captureApTargets()
+    configureApClimb()
     ap.on = true
     ap.spd = true
     toast("Autopilot on.")
@@ -1075,17 +2980,28 @@ function refreshApPanel() {
   const hdg = document.getElementById("ap-hdg")
   const alt = document.getElementById("ap-alt")
   const spd = document.getElementById("ap-spd")
+  const land = document.getElementById("ap-land")
   if (!master) return
   master.classList.toggle("on", ap.on)
   master.textContent = ap.on ? "AP ON" : "AP OFF"
   hdg.classList.toggle("on", ap.on && ap.hdg)
   alt.classList.toggle("on", ap.on && ap.alt)
   spd.classList.toggle("on", ap.on && ap.spd)
+  if (land) {
+    land.classList.toggle("on", ap.on && ap.land)
+    if (ap.land && ap.landPhase) {
+      const tag = String(ap.landPhase).slice(0, 5).toUpperCase()
+      land.textContent = tag
+    } else {
+      land.textContent = "HOME"
+    }
+  }
   document.getElementById("ap-hdg-read").textContent = `HDG ${String(Math.round(ap.targetHdg) % 360).padStart(3, "0")}`
   document.getElementById("ap-alt-read").textContent = `ALT ${Math.round(ap.targetAlt)} m`
   document.getElementById("ap-spd-read").textContent = `SPD ${Math.round(ap.targetSpd * 3.6)} km/h`
   systems.autopilot = ap.on
   systems.autothrottle = ap.on && ap.spd
+  systems.apApp = ap.on && ap.land
   refreshSysPanel()
 }
 
@@ -1094,18 +3010,35 @@ function refreshSysPanel() {
     systems.landing = player.controls.lights > 0.5
     systems.landingL = systems.landing
     systems.landingR = systems.landing
-    systems.gear = player.def.gear.mode === "retract" && player.controls.gear < 0.5
-    systems.gearUp = systems.gear
-    systems.gearDown = !systems.gear
-    systems.doors = player.controls.doors > 0.5
-    systems.flaps = player.controls.flapStep > 0
-    systems.cargo = player.controls.cargo > 0.5
-    systems.nose = player.controls.nose > 0.5
-    systems.spoilers = player.controls.spoilers > 0.5
-    systems.autopilot = ap.on
-    systems.autothrottle = ap.on && ap.spd
-    systems.apHdg = ap.on && ap.hdg
-    systems.apAlt = ap.on && ap.alt
+    if (isCar(player.def)) {
+      systems.gear = false
+      systems.gearUp = false
+      systems.gearDown = true
+      systems.doors = false
+      systems.flaps = false
+      systems.cargo = false
+      systems.nose = false
+      systems.spoilers = false
+      systems.autopilot = false
+      systems.autothrottle = false
+      systems.apHdg = false
+      systems.apAlt = false
+      systems.apApp = false
+    } else {
+      systems.gear = player.def.gear?.mode === "retract" && player.controls.gear < 0.5
+      systems.gearUp = systems.gear
+      systems.gearDown = !systems.gear
+      systems.doors = player.controls.doors > 0.5
+      systems.flaps = player.controls.flapStep > 0
+      systems.cargo = player.controls.cargo > 0.5
+      systems.nose = player.controls.nose > 0.5
+      systems.spoilers = player.controls.spoilers > 0.5
+      systems.autopilot = ap.on
+      systems.autothrottle = ap.on && ap.spd
+      systems.apHdg = ap.on && ap.hdg
+      systems.apAlt = ap.on && ap.alt
+      systems.apApp = ap.on && ap.land
+    }
     systems.mute = muted
   }
   syncCockpitSwitches()
@@ -1167,6 +3100,7 @@ function pressSys(id) {
     if (!ap.on) toggleAutopilot()
     else {
       ap.hdg = !ap.hdg
+      if (!ap.hdg) clearHomeLand()
       refreshApPanel()
       toast(ap.hdg ? "Heading hold on" : "Heading hold off")
     }
@@ -1175,9 +3109,13 @@ function pressSys(id) {
     if (!ap.on) toggleAutopilot()
     else {
       ap.alt = !ap.alt
+      if (!ap.alt) clearHomeLand()
       refreshApPanel()
       toast(ap.alt ? "Altitude hold on" : "Altitude hold off")
     }
+    return
+  } else if (id === "apApp" || id === "apLoc") {
+    toggleHomeLand()
     return
   } else if (id === "camera" || id === "chase") {
     if (mode === "fly") cycleCamera()
@@ -1204,7 +3142,15 @@ function pressSys(id) {
   } else if (id === "fireLeft" || id === "fireRight" || id === "fireApu" || id === "cargoFire" || id === "evac") {
     systems[id] = !systems[id]
     beep(90, 0.4, "sawtooth")
-    toast(systems[id] ? `${def.label} pulled!` : `${def.label} stowed`)
+    if ((id === "fireLeft" || id === "fireRight") && systems[id] && failures.fire) {
+      failures.fire = false
+      failures.fireIndex = -1
+      toast("Fire extinguished!")
+      beep(720, 0.1)
+      refreshFailCautions()
+    } else {
+      toast(systems[id] ? `${def.label} pulled!` : `${def.label} stowed`)
+    }
   } else if (id === "elvTrimUp" || id === "ptcTrim") {
     if (player && mode === "fly") player.root.rotateX(-0.04)
     toast("Elevator trim nose up")
@@ -1257,16 +3203,34 @@ function pressSys(id) {
 }
 
 function applyAutopilot(dt, speed) {
-  if (!ap.on || grounded || recovering) return
+  if (!ap.on || recovering) return
+
+  if (ap.land && grounded) {
+    handleHomeLandRollout(dt, speed)
+    return
+  }
+  if (grounded) return
+
   const flight = player.def.flight
   const pilot = Math.max(Math.abs(held.pitch), Math.abs(held.roll), Math.abs(held.yaw))
+  const mousePilot = mouseStick.live
+    ? Math.max(Math.abs(mouseStick.pitch), Math.abs(mouseStick.roll))
+    : 0
   const keysPilot = keys.has("KeyW") || keys.has("KeyS") || keys.has("KeyA") || keys.has("KeyD")
     || keys.has("ArrowUp") || keys.has("ArrowDown") || keys.has("ArrowLeft") || keys.has("ArrowRight")
     || keys.has("KeyQ") || keys.has("KeyE")
-  if (pilot > 0.45 || keysPilot) {
+  // Home land tolerates light touch drag so camera looks don't cancel the approach.
+  const kick = ap.land ? 0.82 : 0.45
+  if (pilot > kick || mousePilot > kick || keysPilot) {
     disengageAp("Autopilot kicked off — you took the stick.")
     return
   }
+
+  if (ap.land) updateHomeLand(dt, speed)
+
+  const landing = ap.land && (ap.landPhase === "align" || ap.landPhase === "final" || ap.landPhase === "flare")
+  const descending = ap.land && (landing || (ap.landPhase === "nav" && currentAltM() > LAND_NAV_ALT + 20))
+  const flaring = ap.land && ap.landPhase === "flare"
 
   forward.set(0, 0, 1).applyQuaternion(player.root.quaternion)
   up.set(0, 1, 0).applyQuaternion(player.root.quaternion)
@@ -1274,31 +3238,81 @@ function applyAutopilot(dt, speed) {
   const bankRad = Math.atan2(right.y, up.y)
   const pitchNow = Math.asin(THREE.MathUtils.clamp(forward.y, -1, 1))
   const hdg = currentHeadingDeg()
-  let hdgErr = ((ap.targetHdg - hdg + 540) % 360) - 180
+  const hdgErr = ((ap.targetHdg - hdg + 540) % 360) - 180
   const alt = currentAltM()
   const altErr = ap.targetAlt - alt
+  let pathPitch = 0
+  if (speed > 1.5) pathPitch = Math.asin(THREE.MathUtils.clamp(velocity.y / speed, -1, 1))
+  const aoaNow = pitchNow - pathPitch
 
-  if (ap.hdg) {
-    const wantBank = THREE.MathUtils.clamp(hdgErr * 0.035, -0.55, 0.55)
-    const bankErr = wantBank - bankRad
-    stick.roll = THREE.MathUtils.clamp(stick.roll + bankErr * 1.8, -1, 1)
-    if (Math.abs(hdgErr) > 8) stick.yaw = THREE.MathUtils.clamp(stick.yaw + Math.sign(hdgErr) * 0.25, -1, 1)
+  // Speed first. Climb is gated hard so ALT bumps can't haul into a stall spiral.
+  const minSafe = landing ? flight.stall * 1.15 : flight.stall * 1.5
+  const climbReady = speed > flight.stall * 1.7 && aoaNow < 0.16 && pitchNow < 0.14
+  const slow = speed < minSafe
+  const noseHigh = pitchNow > 0.16 || aoaNow > 0.18
+  const protecting = !landing && !descending && (slow || noseHigh)
+  const energy = THREE.MathUtils.clamp((speed - minSafe) / Math.max(12, flight.cruise * 0.4), 0, 1)
+  const low = alt < 120
+
+  // Bank-only heading (no rudder) — AP yaw was fighting the roll→yaw mapping.
+  if (ap.hdg && !protecting) {
+    const bankCap = flaring ? 0.2 : ap.land ? 0.42 : climbReady && altErr > 30 ? 0.25 : 0.38
+    const wantBank = THREE.MathUtils.clamp(hdgErr * (ap.land ? 0.028 : 0.02), -bankCap, bankCap)
+    stick.roll = THREE.MathUtils.clamp((wantBank - bankRad) * 1.4, -1, 1)
   } else {
-    stick.roll = THREE.MathUtils.clamp(stick.roll - bankRad * 1.2, -1, 1)
+    stick.roll = THREE.MathUtils.clamp(-bankRad * 1.8, -1, 1)
+  }
+  stick.yaw = 0
+
+  if (flaring) {
+    const sink = velocity.y
+    const wantPitch = sink < -3 ? 0.12 : alt < 10 ? 0.09 : 0.05
+    stick.pitch = THREE.MathUtils.clamp((wantPitch - pitchNow) * 1.8, -0.25, 0.65)
+  } else if (protecting) {
+    // Unload the wing, but don't dive into the dirt when low.
+    const recoverPitch = low ? (noseHigh ? 0.0 : 0.04) : -0.1
+    stick.pitch = THREE.MathUtils.clamp((recoverPitch - pitchNow) * 1.8, low ? -0.35 : -0.7, 0.2)
+  } else if (ap.alt) {
+    // Hold with tiny pitch; only climb once energy is clearly there.
+    let wantPitch = 0.02
+    if (!landing && !descending && climbReady && altErr > 8) {
+      const climbCap = THREE.MathUtils.lerp(2, 6.5, energy)
+      const wantClimb = THREE.MathUtils.clamp(altErr * 0.06, 0, climbCap)
+      wantPitch = THREE.MathUtils.clamp(0.02 + wantClimb * 0.008, 0.02, 0.08)
+    } else if ((landing || descending) && altErr < -4) {
+      // Stronger sink authority so approaches actually get down to the glideslope.
+      wantPitch = THREE.MathUtils.clamp(altErr * 0.0022, -0.18, -0.025)
+    } else if (altErr < -8) {
+      wantPitch = THREE.MathUtils.clamp(altErr * 0.0008, -0.14, -0.02)
+    } else if (landing && altErr > 8) {
+      wantPitch = THREE.MathUtils.clamp(0.02 + altErr * 0.0006, 0.02, 0.08)
+    } else {
+      wantPitch = THREE.MathUtils.clamp(altErr * 0.0005, -0.05, 0.05)
+    }
+    stick.pitch = THREE.MathUtils.clamp((wantPitch - pitchNow) * 1.35, -1, 1)
+  } else {
+    stick.pitch = THREE.MathUtils.clamp((0.02 - pitchNow) * 1.2, -1, 1)
   }
 
-  if (ap.alt) {
-    const wantPitch = THREE.MathUtils.clamp(altErr * 0.004, -0.22, 0.28)
-    const climbHelp = THREE.MathUtils.clamp(-velocity.y * 0.04, -0.15, 0.15)
-    stick.pitch = THREE.MathUtils.clamp(stick.pitch + (wantPitch + climbHelp - pitchNow) * 2.2, -1, 1)
+  // Autothrottle — allow idle on final/flare; keep energy on cruise AP.
+  let spdTarget = landing
+    ? Math.max(ap.targetSpd, flight.stall * (flaring ? 1.08 : 1.2))
+    : Math.max(ap.targetSpd, flight.stall * 1.6, flight.cruise * 0.8)
+  if (!landing && altErr > 15) spdTarget = Math.max(spdTarget, flight.cruise * 0.88)
+  if (!landing && !descending && (protecting || slow)) spdTarget = Math.max(spdTarget, flight.cruise * 0.92)
+  const spdErr = spdTarget - speed
+  const thrMin = flaring ? 0 : landing ? 0.08 : 0.45
+  const thrMax = flaring ? 0.4 : 1
+  if (flaring) {
+    throttle = THREE.MathUtils.clamp(throttle - dt * 0.55, 0, thrMax)
+    if (spdErr > 5) throttle = THREE.MathUtils.clamp(throttle + spdErr * 0.02 * dt * 60, 0, thrMax)
+  } else if (descending && altErr < -25 && speed > flight.stall * 1.3) {
+    // Pull power in a high approach so we can make the slope.
+    throttle = THREE.MathUtils.clamp(throttle + Math.min(0, spdErr) * 0.04 * dt * 60, 0.15, 0.85)
+  } else {
+    throttle = THREE.MathUtils.clamp(throttle + spdErr * 0.03 * dt * 60, thrMin, thrMax)
   }
-
-  if (ap.spd) {
-    const spdErr = ap.targetSpd - speed
-    throttle = THREE.MathUtils.clamp(throttle + spdErr * 0.012 * dt * 60, 0.15, 1)
-    // Don't fly into a stall on AP.
-    if (speed < flight.stall * 1.15) throttle = Math.max(throttle, 0.7)
-  }
+  if (!landing && !descending && (protecting || altErr > 15 || slow)) throttle = 1
 }
 
 function resetToRunway(message) {
@@ -1310,6 +3324,7 @@ function resetToRunway(message) {
     pilot.root.visible = false
     pilot.chute.visible = false
   }
+  crashFx?.clear()
   velocity.set(0, 0, 0)
   throttle = 0
   takeoffBoost = 0
@@ -1318,10 +3333,13 @@ function resetToRunway(message) {
   grounded = true
   systems.parking = false
   ap.on = false
+  clearHomeLand()
+  clearFailures({ quiet: true })
   clearCautions()
   resetControls(player)
-  place(player, localOrigin.x + 0, localOrigin.z + 80, 0)
-  player.setCockpit(cameraMode === 1)
+  if (playerIsCar()) place(player, PAD.x - 40, PAD.z + 40, 0.4)
+  else place(player, localOrigin.x + 0, localOrigin.z + 80, 0)
+  player.setCockpit(cameraMode === 1 && !playerIsCar())
   snapCam = true
   refreshApPanel()
   if (message) toast(message)
@@ -1329,27 +3347,43 @@ function resetToRunway(message) {
 
 function startFlight() {
   if (!player) return
+  refreshBanLock()
+  if (isBanned()) {
+    toast(`Banned — wait ${formatBanClock(banRemainingMs())}.`)
+    return
+  }
   world.resetRings()
   distance = 0
   toldRotate = false
   coachOn = true
   cameraMode = 0
+  hideCrashScreen()
   recovering = false
+  crashTimer = 0
+  crashFx?.clear()
   resetToRunway()
   mode = "fly"
   menu.hidden = true
   const settingsPage = document.getElementById("settings-page")
   if (settingsPage) settingsPage.hidden = true
   hud.hidden = false
-  document.getElementById("coach").hidden = false
-  document.getElementById("hud-name").textContent = isAirliner(player.def)
-    ? `${player.def.name} · ${AIRLINE_NAME}`
-    : player.def.name
+  const coach = document.getElementById("coach")
+  coach.hidden = false
+  coach.textContent = playerIsCar()
+    ? "Push Up / W or slide throttle to drive. Steer with Left / Right. Space brakes. Down reverses."
+    : "Throttle up, then move the mouse to bank and pitch — point the plane anywhere."
+  clearMouseStick()
+  document.getElementById("hud-name").textContent =
+    player.def.brand === "fedex"
+      ? `${player.def.name} · FedEx Express`
+      : isAirliner(player.def) ? `${player.def.name} · ${AIRLINE_NAME}` : player.def.name
   document.getElementById("hints").textContent = hintLine(player.def)
   renderPartButtons()
   refreshSysPanel()
   refreshWxPanel()
   refreshFlyActions()
+  refreshFailPanel()
+  syncChatChrome()
   ensureAudio()
 }
 
@@ -1367,6 +3401,11 @@ function showMenu() {
   if (mode === "fly" && distance > 80) {
     toast(`You flew ${(distance / 1000).toFixed(1)} km in the ${player.def.name}.`)
   }
+  hideCrashScreen()
+  setSwapPanelOpen(false)
+  crashFx?.clear()
+  recovering = false
+  crashTimer = 0
   if (outside) enterPlane({ quiet: true })
   outside = false
   chuteOpen = false
@@ -1381,14 +3420,19 @@ function showMenu() {
   if (settingsPage) settingsPage.hidden = true
   velocity.set(0, 0, 0)
   ap.on = false
+  clearMouseStick()
+  clearHomeLand()
   clearCautions()
   refreshApPanel()
   refreshWxPanel()
+  refreshFailPanel()
+  syncChatChrome()
   player.setCockpit(false)
   camera.up.set(0, 1, 0)
-  camera.fov = 68
+  camera.fov = 60
   camera.updateProjectionMatrix()
-  place(player, PAD.x, PAD.z, 0.4)
+  if (playerIsCar()) place(player, PAD.x - 40, PAD.z + 40, 0.4)
+  else place(player, PAD.x, PAD.z, 0.4)
   snapCam = true
   cameraMode = 0
 }
@@ -1444,9 +3488,10 @@ function resetCockpitLook() {
 function cycleCamera() {
   if (outside) return
   cameraMode = (cameraMode + 1) % CAMERA_NAMES.length
-  player.setCockpit(cameraMode === COCKPIT_CAM)
+  if (playerIsCar() && cameraMode === COCKPIT_CAM) cameraMode = (cameraMode + 1) % CAMERA_NAMES.length
+  player.setCockpit(cameraMode === COCKPIT_CAM && !playerIsCar())
   camera.up.set(0, 1, 0)
-  camera.fov = cameraMode === COCKPIT_CAM ? 75 : 68
+  camera.fov = cameraMode === COCKPIT_CAM ? 70 : 60
   camera.near = cameraMode === COCKPIT_CAM ? 0.05 : 0.08
   camera.updateProjectionMatrix()
   snapCam = true
@@ -1464,16 +3509,181 @@ function cycleCamera() {
   refreshFlyActions()
 }
 
-function crash(message) {
-  if (recovering || mode !== "fly") return
+let crashPromptOpen = false
+let lastCrashMessage = "That didn’t go as planned."
+
+function hideCrashScreen() {
+  const screen = document.getElementById("crash-screen")
+  if (screen) screen.hidden = true
+  crashPromptOpen = false
+}
+
+function showCrashScreen(message) {
+  lastCrashMessage = message || lastCrashMessage
+  const screen = document.getElementById("crash-screen")
+  const msg = document.getElementById("crash-message")
+  if (msg) msg.textContent = lastCrashMessage
+  if (screen) screen.hidden = false
+  crashPromptOpen = true
   recovering = true
   velocity.set(0, 0, 0)
+  crashTimer = 0
+  crashSpin.set(0, 0, 0)
+  throttle = 0
+  ap.on = false
+  clearHomeLand()
+}
+
+function respawnAfterCrash() {
+  hideCrashScreen()
+  crashFx?.clear()
+  if (player) {
+    player.root.rotation.x = 0
+    player.root.rotation.z = 0
+  }
+  recovering = false
+  resetToRunway("Back on the runway. Try again!")
+  mode = "fly"
+  menu.hidden = true
+  hud.hidden = false
+  const settingsPage = document.getElementById("settings-page")
+  if (settingsPage) settingsPage.hidden = true
+  snapCam = true
+  beep(520, 0.08)
+}
+
+function hangarAfterCrash() {
+  hideCrashScreen()
+  crashFx?.clear()
+  if (player) {
+    player.root.rotation.x = 0
+    player.root.rotation.z = 0
+  }
+  recovering = false
+  showMenu()
+  beep(320, 0.08)
+}
+
+function bindCrashScreen() {
+  document.getElementById("crash-respawn")?.addEventListener("click", () => {
+    ensureAudio()
+    respawnAfterCrash()
+  })
+  document.getElementById("crash-hangar")?.addEventListener("click", () => {
+    ensureAudio()
+    hangarAfterCrash()
+  })
+}
+
+function crash(message) {
+  if (recovering || mode !== "fly" || crashPromptOpen) return
+  if (cheats.admin && !cheats.crashPhysics) {
+    velocity.multiplyScalar(-0.25)
+    velocity.y = Math.max(2, Math.abs(velocity.y) * 0.35)
+    toast(`${message} (admin shrug)`)
+    beep(220, 0.12, "triangle")
+    return
+  }
+  recovering = true
+  lastCrashMessage = message || "That didn’t go as planned."
   toast(message)
   beep(90, 0.35, "sawtooth")
+  if (cheats.crashPhysics) {
+    crashTimer = playerIsCar() ? 4.2 : 5.5
+    crashGroundHits = 0
+    // Strong tumbling — barrel-roll + yaw so the wreck keeps rolling
+    const horiz = Math.hypot(velocity.x, velocity.z)
+    crashRollAxis.set(-velocity.z, 0, velocity.x)
+    if (crashRollAxis.lengthSq() < 0.01) crashRollAxis.set(1, 0, 0)
+    crashRollAxis.normalize()
+    crashSpin.set(
+      (Math.random() - 0.5) * 9 + crashRollAxis.x * (4 + horiz * 0.08),
+      (Math.random() - 0.5) * 5.5,
+      (Math.random() - 0.5) * 10 + crashRollAxis.z * (4 + horiz * 0.08)
+    )
+    const kick = playerIsCar() ? 16 : 22
+    velocity.x += (Math.random() - 0.5) * kick
+    velocity.z += (Math.random() - 0.5) * kick
+    velocity.y = playerIsCar() ? Math.abs(velocity.y) + 5 : Math.max(velocity.y, 2) + 10
+    crashFx?.begin({
+      craft: player,
+      position: player.root.position.clone(),
+      velocity: velocity.clone(),
+      isCar: playerIsCar(),
+    })
+    // Second impact boom
+    setTimeout(() => beep(55, 0.45, "sawtooth"), 120)
+    setTimeout(() => beep(40, 0.55, "square"), 280)
+    return
+  }
+  velocity.set(0, 0, 0)
   setTimeout(() => {
-    if (mode === "fly") resetToRunway()
-    recovering = false
+    if (mode === "fly" && recovering) showCrashScreen(lastCrashMessage)
   }, 700)
+}
+
+function stepCrashPhysics(dt) {
+  if (!player || !recovering || !cheats.crashPhysics) return false
+  if (crashPromptOpen) {
+    crashFx?.update(dt, player.root.position)
+    return true
+  }
+  if (crashTimer <= 0) return false
+  crashTimer -= dt
+
+  // Continuous rolling tumble in world space
+  player.root.rotateOnWorldAxis(crashRollAxis, crashSpin.length() * 0.55 * dt)
+  player.root.rotateX(crashSpin.x * dt)
+  player.root.rotateY(crashSpin.y * dt)
+  player.root.rotateZ(crashSpin.z * dt)
+
+  velocity.y -= (playerIsCar() ? 26 : 20) * dt
+  // Skidding drag — still slides a long way
+  velocity.x *= Math.max(0.15, 1 - 0.28 * dt)
+  velocity.z *= Math.max(0.15, 1 - 0.28 * dt)
+  player.root.position.addScaledVector(velocity, dt)
+
+  const clearance = clearanceOf(player)
+  if (player.root.position.y <= clearance) {
+    player.root.position.y = clearance
+    const impact = Math.abs(velocity.y)
+    if (velocity.y < 0) {
+      velocity.y *= -0.42
+      // Convert slide speed into more roll on each bounce
+      const slide = Math.hypot(velocity.x, velocity.z)
+      crashSpin.x += (Math.random() - 0.5) * (2 + slide * 0.12)
+      crashSpin.z += (Math.random() - 0.5) * (2 + slide * 0.12)
+      crashSpin.y += (Math.random() - 0.5) * 1.5
+      if (crashRollAxis.lengthSq() > 0.01) {
+        crashSpin.addScaledVector(crashRollAxis, slide * 0.08)
+      }
+    }
+    velocity.x *= 0.78
+    velocity.z *= 0.78
+    crashSpin.multiplyScalar(0.88)
+    crashGroundHits += 1
+    if (impact > 1.2) {
+      beep(60 + Math.random() * 40, 0.07, "square")
+      // Fresh scars + scrap on hard bounces (don't restart the whole wreck FX)
+      if (crashGroundHits <= 6) {
+        crashFx?.burstAt(
+          player.root.position,
+          velocity.clone().setY(Math.max(8, impact * 4)),
+          Math.max(1.4, Math.min(3.5, (player.def?.length || 12) * 0.1))
+        )
+      }
+    }
+  }
+
+  crashFx?.update(dt, player.root.position)
+
+  if (crashTimer <= 0) {
+    crashTimer = 0
+    crashSpin.set(0, 0, 0)
+    velocity.set(0, 0, 0)
+    if (mode === "fly") showCrashScreen(lastCrashMessage)
+  }
+  return true
 }
 
 let audioCtx
@@ -1523,24 +3733,43 @@ function beep(freq, dur, type = "sine") {
 }
 
 function updateAudio(craft, engineThrottle, speed) {
-  if (!audioCtx) return
-  const jet = craft.def.engines.some((engine) => engine.kind === "jet")
+  if (!audioCtx || !engineGain) return
   const now = audioCtx.currentTime
-  engineOsc.type = jet ? "sawtooth" : "triangle"
-  engineOsc.frequency.setTargetAtTime(jet ? 78 + engineThrottle * 190 + speed * 0.12 : 52 + engineThrottle * 120 + speed * 0.25, now, 0.08)
-  engineFilter.frequency.setTargetAtTime(jet ? 380 + engineThrottle * 2400 : 180 + engineThrottle * 760, now, 0.08)
-  const volume = muted || mode !== "fly" ? (mode === "menu" && !muted ? 0.012 : 0) : 0.02 + engineThrottle * 0.055
-  engineGain.gain.setTargetAtTime(volume, now, 0.08)
+  // Hangar / walk-around stay silent — no idle buzz behind the menu.
+  if (muted || mode !== "fly" || outside || !craft) {
+    engineGain.gain.setTargetAtTime(0, now, 0.04)
+    return
+  }
+  const jet = craft.def.engines.some((engine) => engine.kind === "jet")
+  const t = THREE.MathUtils.clamp(engineThrottle, 0, 1)
+  // Soft triangle/square mix beats a raw sawtooth drone.
+  engineOsc.type = jet ? "triangle" : "sine"
+  engineOsc.frequency.setTargetAtTime(
+    jet ? 55 + t * 95 + speed * 0.08 : 48 + t * 90 + speed * 0.2,
+    now,
+    0.1
+  )
+  engineFilter.frequency.setTargetAtTime(
+    jet ? 220 + t * 1400 : 160 + t * 700,
+    now,
+    0.1
+  )
+  // Quiet at idle / shut down; swell with throttle only while flying.
+  const volume = t < 0.04 ? 0 : 0.01 + t * 0.045
+  engineGain.gain.setTargetAtTime(volume, now, 0.1)
 }
 
 function toggleMute() {
   muted = !muted
   const muteBtn = document.getElementById("mute-btn")
   if (muteBtn) muteBtn.textContent = muted ? "Sound off" : "Sound on"
+  if (audioCtx && engineGain) {
+    engineGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.02)
+  }
 }
 
 function goCockpitView() {
-  if (mode !== "fly" || !player || outside) return
+  if (mode !== "fly" || !player || outside || playerIsCar()) return
   cameraMode = COCKPIT_CAM
   player.setCockpit(true)
   camera.fov = 75
@@ -1556,7 +3785,7 @@ function goOrbitView() {
   if (mode !== "fly" || !player || outside) return
   cameraMode = ORBIT_CAM
   player.setCockpit(false)
-  camera.fov = 68
+  camera.fov = 60
   camera.near = 0.08
   camera.updateProjectionMatrix()
   resetFlyOrbit()
@@ -1583,10 +3812,16 @@ function refreshFlyActions() {
     }
   }
   if (cam) cam.textContent = outside ? "Look" : `Cam ${cameraMode + 1}`
-  if (cockpit) cockpit.hidden = outside
+  if (cockpit) cockpit.hidden = outside || playerIsCar()
   if (orbit) orbit.hidden = outside
   const muteBtn = document.getElementById("mute-btn")
   if (muteBtn) muteBtn.textContent = muted ? "Sound off" : "Sound on"
+  const adi = document.getElementById("adi")
+  if (adi) adi.hidden = playerIsCar() || outside
+  const cautions = document.getElementById("cautions")
+  if (cautions) cautions.hidden = playerIsCar()
+  const apPanel = document.getElementById("ap-panel")
+  if (apPanel) apPanel.hidden = playerIsCar() || outside || mode !== "fly"
 }
 
 function bindFlyActions() {
@@ -1601,6 +3836,8 @@ function bindFlyActions() {
     else if (action === "cam") cycleCamera()
     else if (action === "cockpit") goCockpitView()
     else if (action === "orbit") goOrbitView()
+    else if (action === "chat") setChatOpen(!chatOpen())
+    else if (action === "planes") setSwapPanelOpen(!swapPanelOpen())
     else if (action === "jump") onJumpKey()
     else if (action === "reset") resetToRunway("Back on the runway.")
     else if (action === "mute") toggleMute()
@@ -1648,9 +3885,29 @@ function readStick() {
   if (keys.has("KeyD") || keys.has("ArrowRight")) stick.roll += 1
   if (keys.has("KeyQ")) stick.yaw -= 1
   if (keys.has("KeyE")) stick.yaw += 1
+  // Mouse aim: bank / steer with cursor; pitch only in the air (cars use keys for gas).
+  if (
+    mouseStick.live
+    && Math.abs(held.pitch) < 0.04
+    && Math.abs(held.roll) < 0.04
+    && !keys.has("KeyA") && !keys.has("KeyD")
+    && !keys.has("ArrowLeft") && !keys.has("ArrowRight")
+    && (
+      playerIsCar()
+      || (
+        !keys.has("KeyW") && !keys.has("KeyS")
+        && !keys.has("ArrowUp") && !keys.has("ArrowDown")
+      )
+    )
+  ) {
+    if (!playerIsCar()) stick.pitch += mouseStick.pitch
+    stick.roll += mouseStick.roll
+  }
   stick.pitch = THREE.MathUtils.clamp(stick.pitch, -1, 1)
   stick.roll = THREE.MathUtils.clamp(stick.roll, -1, 1)
   stick.yaw = THREE.MathUtils.clamp(stick.yaw, -1, 1)
+  // Full throttle clears a stuck parking brake so air drag can't lock a stall.
+  if (throttle > 0.35 && systems.parking) systems.parking = false
   braking = held.brake > 0 || keys.has("Space") || !!systems.parking
 }
 
@@ -1670,23 +3927,33 @@ function stepFlight(dt) {
   applyAutopilot(dt, speed)
 
   const pushingDown = stick.pitch < -0.2
-  if (grounded && throttle > 0.55 && speed > flight.rotate * 0.82 && !pushingDown) rotateWait += dt
+  // Liftoff only once safely above stall — Vr used to sit below Vs and auto-rotate
+  // threw every takeoff straight into a stall that couldn't be recovered.
+  const rotateMin = Math.max(flight.rotate, flight.stall * 1.12)
+  if (grounded && throttle > 0.55 && speed > rotateMin * 0.92 && !pushingDown) rotateWait += dt
   else if (!grounded || throttle < 0.4) rotateWait = 0
   const wantsUp = !pushingDown && (stick.pitch > 0.12 || rotateWait > 1.6)
-  const rotating = grounded && throttle > 0.35 && speed > flight.rotate * 0.82 && wantsUp && player.gearT > 0.55
-  if (rotating && stick.pitch < 0.45) stick.pitch = 0.7
+  const rotating = grounded && throttle > 0.35 && speed > rotateMin * 0.92 && wantsUp && player.gearT > 0.55
+  if (rotating && stick.pitch < 0.45) stick.pitch = 0.55
 
+  const ctrl = controlFactor()
   const authority = grounded ? 0.35 : THREE.MathUtils.clamp(speed / Math.max(12, flight.stall), 0.35, 1)
-  const pitchAuth = grounded ? (speed > flight.rotate * 0.55 ? 1 : 0.55) : authority
-  player.root.rotateX(-stick.pitch * flight.pitch * pitchAuth * dt)
-  player.root.rotateZ(-stick.roll * flight.roll * (grounded ? 0.2 : authority) * dt)
+  const pitchAuth = grounded ? (speed > rotateMin * 0.55 ? 1 : 0.55) : authority
+  player.root.rotateX(-stick.pitch * flight.pitch * pitchAuth * ctrl * dt)
+  player.root.rotateZ(-stick.roll * flight.roll * (grounded ? 0.2 : authority) * ctrl * dt)
   const steer = stick.yaw + stick.roll * (grounded ? 1 : 0.45)
-  player.root.rotateY(steer * flight.yaw * (grounded ? 1 : authority) * dt * (grounded ? Math.min(1, 0.25 + speed / 30) : 1))
+  // Negate yaw: +roll / ArrowRight must turn right (+Z-forward).
+  player.root.rotateY(-steer * flight.yaw * (grounded ? 1 : authority) * ctrl * dt * (grounded ? Math.min(1, 0.25 + speed / 30) : 1))
+  // Asymmetric thrust yaw when one engine is out.
+  if (!grounded && (failures.eng1 || failures.eng2) && !(failures.eng1 && failures.eng2)) {
+    const side = failures.eng1 ? 1 : -1
+    player.root.rotateY(side * 0.22 * throttle * dt)
+  }
 
   forward.set(0, 0, 1).applyQuaternion(player.root.quaternion)
   if (grounded) {
     const pitchNow = Math.asin(THREE.MathUtils.clamp(forward.y, -1, 1))
-    const maxPitch = speed > flight.rotate * 0.8 ? 0.32 : 0.1
+    const maxPitch = speed > rotateMin * 0.8 ? 0.28 : 0.1
     if (pitchNow > maxPitch) player.root.rotateX(pitchNow - maxPitch)
   }
 
@@ -1712,27 +3979,31 @@ function stepFlight(dt) {
   if (!grounded && Math.abs(stick.roll) < 0.08) {
     player.root.rotateZ(-bankRad * flight.stability * dt)
   }
-  if (!grounded && Math.abs(stick.pitch) < 0.08 && speed > 8) {
+  if (!ap.on && !grounded && Math.abs(stick.pitch) < 0.08 && speed > 8) {
     const currentPitch = Math.asin(THREE.MathUtils.clamp(forward.y, -1, 1))
-    const targetPitch = THREE.MathUtils.clamp((flight.cruise * 0.92 - speed) / flight.cruise, -0.18, 0.22) * 0.35
-    player.root.rotateX(-(targetPitch - currentPitch) * flight.stability * 0.8 * dt)
+    // Soft speed trim — don't haul the nose up into a stall while "hands off."
+    const speedTrim = THREE.MathUtils.clamp((flight.cruise * 0.88 - speed) / flight.cruise, -0.12, 0.14) * 0.18
+    player.root.rotateX(-(speedTrim - currentPitch) * flight.stability * 0.55 * dt)
     forward.set(0, 0, 1).applyQuaternion(player.root.quaternion)
     up.set(0, 1, 0).applyQuaternion(player.root.quaternion)
     right.set(1, 0, 0).applyQuaternion(player.root.quaternion)
   }
 
-  const stalling = !grounded && (speed < stallSpeed * 1.05 || aoa > 0.26)
+  // Arcade-friendly stall: warn early, punish late, keep enough lift to recover.
+  const stalling = !grounded && takeoffBoost <= 0 && (speed < stallSpeed * 0.92 || aoa > 0.34)
   if (stalling) {
-    player.root.rotateX(1.1 * dt * Math.max(0.2, 1 - speed / Math.max(1, stallSpeed)))
-    player.root.rotateZ(Math.sin(performance.now() * 0.028) * 0.35 * dt)
+    player.root.rotateX(0.55 * dt * Math.max(0.15, 1 - speed / Math.max(1, stallSpeed)))
+    player.root.rotateZ(Math.sin(performance.now() * 0.028) * 0.2 * dt)
     forward.set(0, 0, 1).applyQuaternion(player.root.quaternion)
     up.set(0, 1, 0).applyQuaternion(player.root.quaternion)
     right.set(1, 0, 0).applyQuaternion(player.root.quaternion)
   }
 
-  const flying = THREE.MathUtils.clamp(speed / Math.max(8, stallSpeed), 0, 1)
+  const flying = THREE.MathUtils.clamp(speed / Math.max(8, stallSpeed * 0.85), 0, 1.05)
   const bankLift = THREE.MathUtils.clamp(up.y, 0, 1)
-  const aoaLift = stalling ? 0.15 : THREE.MathUtils.clamp(1 - Math.abs(aoa) * 1.4, 0.35, 1)
+  const aoaLift = stalling
+    ? 0.45
+    : THREE.MathUtils.clamp(1 - Math.abs(aoa) * 1.1, 0.45, 1.05)
 
   let dragK = flight.drag
   dragK *= 1 + player.flapT * 0.75
@@ -1741,21 +4012,30 @@ function stepFlight(dt) {
   if (player.spoilerT > 0.2) dragK += flight.drag * 0.9
   if (player.noseT > 0.2) dragK += flight.drag * 0.12
   if (!grounded && def.gear.mode === "retract" && player.gearT > 0.25) dragK += flight.drag * 0.28
-  if (braking) dragK += flight.drag * 1.2
-  if (stalling) dragK *= 1.35
+  // Parking / wheel brakes only bite on the ground — not in the air.
+  if (braking && grounded) dragK += flight.drag * 1.2
+  if (stalling) dragK *= 1.2
   if (speed > flight.cruise * 1.4) dragK *= 1.2
 
   const weather = sampleWind(player.root.position, wind)
   const shearHit = !grounded && weather.shear > 0.35
 
-  velocity.addScaledVector(forward, ((throttle * flight.thrust) / flight.mass) * dt)
+  velocity.addScaledVector(forward, ((throttle * flight.thrust * thrustFactor()) / flight.mass) * dt)
+  if (failures.fire) {
+    // Fire adds drag and a little buffet until extinguished from the Fail panel.
+    velocity.addScaledVector(velocity, -0.08 * dt)
+    player.root.rotateZ(Math.sin(performance.now() * 0.04) * 0.15 * dt)
+  }
+  tickFailures(dt)
+  refreshFailCautions()
   velocity.y -= 9.81 * dt
   if (!grounded || rotating) velocity.y += 9.81 * flying * bankLift * aoaLift * dt
-  if (rotating) velocity.y = Math.max(velocity.y, 4)
-  if (stalling) velocity.y -= 4.5 * dt
+  if (rotating) velocity.y = Math.max(velocity.y, 5)
+  if (takeoffBoost > 0 && !grounded) velocity.y += 3.2 * Math.min(1, takeoffBoost) * dt
+  if (stalling) velocity.y -= 1.6 * dt
   // Air mass moves the plane; shear layers shove harder when you cross them.
   if (!grounded) {
-    const windBlend = 1 - Math.exp(-dt * (shearHit ? 2.4 : 0.55))
+    const windBlend = 1 - Math.exp(-dt * (shearHit ? 1.6 : 0.35))
     velocity.x = THREE.MathUtils.lerp(velocity.x, velocity.x + wind.x, windBlend * 0.35)
     velocity.y = THREE.MathUtils.lerp(velocity.y, velocity.y + wind.y, windBlend * 0.45)
     velocity.z = THREE.MathUtils.lerp(velocity.z, velocity.z + wind.z, windBlend * 0.35)
@@ -1770,7 +4050,7 @@ function stepFlight(dt) {
     }
   }
   if (!grounded && speed > 10) {
-    const align = stalling ? 0.35 : shearHit ? 0.7 : 1.5
+    const align = stalling ? 0.85 : shearHit ? 0.7 : 1.5
     const aimed = forward.clone().multiplyScalar(Math.max(8, velocity.length()))
     velocity.lerp(aimed, 1 - Math.exp(-dt * align))
   }
@@ -1785,7 +4065,7 @@ function stepFlight(dt) {
   }
   if (!Number.isFinite(velocity.x) || !Number.isFinite(velocity.y) || !Number.isFinite(velocity.z)) velocity.set(0, 0, 0)
 
-  const maxV = flight.cruise * 1.7
+  const maxV = flight.cruise * 1.7 * (cheats.turbo ? 2 : 1)
   if (velocity.length() > maxV) velocity.multiplyScalar(maxV / velocity.length())
 
   const previousY = player.root.position.y
@@ -1798,9 +4078,11 @@ function stepFlight(dt) {
 
   if (hitGround && !rotating && sink <= 0.4) {
     const impact = sink
-    const hard = wasAirborne && impact < -12
-    const belly = player.gearT < 0.45 && wasAirborne && impact < -7
-    if ((hard || belly) && speed > 16) {
+    const hardLimit = cheats.crashPhysics ? -8 : -12
+    const bellyLimit = cheats.crashPhysics ? -4.5 : -7
+    const hard = wasAirborne && impact < hardLimit
+    const belly = player.gearT < 0.45 && wasAirborne && impact < bellyLimit
+    if ((hard || belly) && speed > (cheats.crashPhysics ? 10 : 16)) {
       crash(belly ? "The gear was up. Let's try that landing again." : "That landing was too hard. Let's try again.")
       return
     }
@@ -1831,7 +4113,7 @@ function stepFlight(dt) {
   } else {
     if (player.root.position.y < clearance) player.root.position.y = clearance
     grounded = false
-    if (previousY <= clearance + 0.3) takeoffBoost = 2.4
+    if (previousY <= clearance + 0.3) takeoffBoost = 3.5
   }
 
   if (!grounded && player.root.position.y > clearance + 8) wasAirborne = true
@@ -1855,26 +4137,7 @@ function stepFlight(dt) {
     crash("The water is for boats. Back to the runway.")
   }
 
-  let collected = 0
-  for (const ring of world.rings) {
-    if (ring.got) {
-      collected += 1
-      continue
-    }
-    const dx = player.root.position.x - ring.x
-    const dy = player.root.position.y - ring.y
-    const dz = player.root.position.z - ring.z
-    if (dx * dx + dy * dy + dz * dz < (ring.r * 0.72) ** 2) {
-      ring.got = true
-      ring.mesh.material.color.set(0xf0a202)
-      collected += 1
-      toast(collected === world.rings.length ? "You flew the whole course!" : `Ring ${collected} of ${world.rings.length}`)
-      beep(660, 0.12)
-      setTimeout(() => beep(880, 0.14), 90)
-    }
-  }
-
-  if (!toldRotate && grounded && throttle > 0.75 && speed > flight.rotate) {
+  if (!toldRotate && grounded && throttle > 0.75 && speed > rotateMin) {
     toldRotate = true
     toast("Pull back to take off.")
   }
@@ -2068,8 +4331,6 @@ function updateHud(speed) {
   document.getElementById("hud-aoa").textContent = `${Math.round(THREE.MathUtils.radToDeg(flightInfo.aoa))}`
   const heading = Math.round((THREE.MathUtils.radToDeg(Math.atan2(forward.x, forward.z)) + 360) % 360)
   document.getElementById("hud-head").textContent = String(heading).padStart(3, "0")
-  const got = world.rings.filter((ring) => ring.got).length
-  document.getElementById("hud-rings").textContent = `Rings ${got}/${world.rings.length}`
   const camEl = document.getElementById("hud-cam")
   if (camEl) camEl.textContent = camLabel()
   const regionEl = document.getElementById("hud-region")
@@ -2089,7 +4350,12 @@ function updateHud(speed) {
   const coach = document.getElementById("coach")
   if (!grounded) coachOn = false
   coach.hidden = !coachOn || flightInfo.warnings.length > 0
-  if (coachOn && grounded && velocity.length() > player.def.flight.rotate && throttle > 0.5) {
+  if (playerIsCar()) {
+    if (coachOn && speed > 8) {
+      coach.textContent = "Follow the service road out to the highway ring."
+      coachOn = false
+    }
+  } else if (coachOn && grounded && velocity.length() > player.def.flight.rotate && throttle > 0.5) {
     coach.textContent = "You are fast enough. Pull back to take off."
   }
   refreshApPanel()
@@ -2113,6 +4379,13 @@ function craftInput(craft, engineThrottle, speed, isGrounded, flightStick) {
         ap: ap.on,
       }
     : null
+  const engineCount = craft.def?.engines?.length || craft.engineFires?.length || 0
+  const engineFire = []
+  for (let i = 0; i < engineCount; i += 1) {
+    engineFire.push(
+      craft === player && failures.fire && (failures.fireIndex < 0 || failures.fireIndex === i)
+    )
+  }
   return {
     throttle: engineThrottle,
     speed,
@@ -2123,6 +4396,7 @@ function craftInput(craft, engineThrottle, speed, isGrounded, flightStick) {
     warnings: craft === player ? flightInfo.warnings : [],
     instruments,
     systems: craft === player ? systems : null,
+    engineFire,
   }
 }
 
@@ -2135,7 +4409,7 @@ function updateWarnings(dt, speed, stallSpeed, bankRad, aoaRad, alt, shear = 0) 
   const warnings = []
   const bankDeg = Math.abs(THREE.MathUtils.radToDeg(bankRad))
   const aoaDeg = THREE.MathUtils.radToDeg(aoaRad)
-  const stalling = !grounded && (speed < stallSpeed * 1.12 || aoaDeg > 14)
+  const stalling = !grounded && takeoffBoost <= 0 && (speed < stallSpeed * 1.05 || aoaDeg > 18)
   const bankWarn = !grounded && bankDeg > 42
   const overspeed = speed > player.def.flight.cruise * 1.42
   const windshear = !grounded && shear > 0.35
@@ -2228,9 +4502,18 @@ function updateWarnings(dt, speed, stallSpeed, bankRad, aoaRad, alt, shear = 0) 
 function animate() {
   requestAnimationFrame(animate)
   try {
-  const dt = Math.min(0.033, Math.max(0.001, clock.getDelta()))
-  if (mode === "fly" && !recovering) {
+  let dt = Math.min(0.033, Math.max(0.001, clock.getDelta()))
+  if (cheats.slowmo) dt *= 0.5
+  banUiAcc += dt
+  if (banUiAcc > 0.25) {
+    banUiAcc = 0
+    refreshBanLock()
+  }
+  if (mode === "fly" && recovering && (crashTimer > 0 || crashPromptOpen)) {
+    if (cheats.crashPhysics) stepCrashPhysics(dt)
+  } else if (mode === "fly" && !recovering) {
     if (outside) stepOutside(dt)
+    else if (playerIsCar()) stepDrive(dt)
     else stepFlight(dt)
   } else if (player) {
     player.root.position.y = clearanceOf(player)
@@ -2239,7 +4522,7 @@ function animate() {
 
   const showcaseThrottle = mode === "menu" ? 0.28 : (outside ? 0 : throttle)
   if (player) {
-    updateAircraft(
+    updateVehicle(
       player,
       dt,
       craftInput(
@@ -2253,7 +4536,11 @@ function animate() {
     if (mode === "menu" || outside) player.root.position.y = clearanceOf(player)
   }
   for (const craft of parked) {
-    updateAircraft(craft, dt, craftInput(craft, 0, 0, true, { pitch: 0, roll: 0, yaw: 0 }))
+    updateVehicle(craft, dt, craftInput(craft, 0, 0, true, { pitch: 0, roll: 0, yaw: 0 }))
+  }
+  for (const car of worldCars) {
+    if (car === player) continue
+    updateVehicle(car, dt, craftInput(car, 0, 0, true, { pitch: 0, roll: 0, yaw: 0 }))
   }
   for (const remote of remotes.values()) {
     if (!remote.craft?.root) continue
@@ -2263,13 +4550,13 @@ function animate() {
     }
     remote.craft.root.visible = true
     const groundedRemote = remote.mode !== "fly" || remote.craft.root.position.y < clearanceOf(remote.craft) + 2
-    updateAircraft(
+    updateVehicle(
       remote.craft,
       dt,
       craftInput(
         remote.craft,
         remote.throttle ?? 0.15,
-        groundedRemote ? 0 : 40,
+        groundedRemote ? 0 : (isCar(remote.craft.def) ? 12 : 40),
         groundedRemote,
         { pitch: 0, roll: 0, yaw: 0 }
       )
@@ -2280,6 +4567,24 @@ function animate() {
       const scale = THREE.MathUtils.clamp(dist / 180, 1, 8)
       remote.plate.scale.setScalar(scale)
       remote.plate.position.y = 10 + scale * 2
+    }
+    for (const child of remote.craft.root.children) {
+      if (!child.userData?.chatBubble) continue
+      child.lookAt(camera.position)
+      const dist = camera.position.distanceTo(remote.craft.root.position)
+      const scale = THREE.MathUtils.clamp(dist / 160, 1.1, 9)
+      child.scale.setScalar(scale)
+      child.position.y = 14 + scale * 2.4
+    }
+  }
+  if (player?.root) {
+    for (const child of player.root.children) {
+      if (!child.userData?.chatBubble) continue
+      child.lookAt(camera.position)
+      const dist = camera.position.distanceTo(player.root.position)
+      const scale = THREE.MathUtils.clamp(dist / 160, 1.1, 9)
+      child.scale.setScalar(scale)
+      child.position.y = 14 + scale * 2.4
     }
   }
   trafficUiAcc += dt
@@ -2293,7 +4598,7 @@ function animate() {
   if (player) {
     updateCamera(dt)
     const focus = player.root.position
-    const span = Math.max(50, player.def.wing.span * 0.8)
+    const span = Math.max(50, (player.def.wing?.span || player.def.width || 20) * 0.8)
     weather.sunFollow(focus)
     sun.target.position.set(focus.x, focus.y, focus.z)
     sun.shadow.camera.left = -span
@@ -2316,16 +4621,19 @@ let hangarReady = false
 
 async function bootMenu() {
   if (hangarReady) return
-  if (PLANES.length !== 7) throw new Error(`Expected 7 airliners, found ${PLANES.length}`)
+  if (PLANES.length < 1) throw new Error("Hangar fleet is empty")
   boot.hidden = false
-  boot.textContent = "Loading hangar…"
+  boot.textContent = "Opening hangar…"
+  await ensureSimCore()
+  // Tiny starter set only — rest loads when you pick a plane.
+  const bootIds = ["a320", "b737"].filter(Boolean)
   await preloadAircraftModels((done, total) => {
     boot.textContent = `Loading aircraft… ${done}/${total}`
-  })
+  }, bootIds)
   list.innerHTML = ""
   buttons.length = 0
   let lastGroup = ""
-  PLANES.forEach((def, index) => {
+  FLEET.forEach((def, index) => {
     if (def.group !== lastGroup) {
       const heading = document.createElement("h3")
       heading.textContent = def.group
@@ -2336,14 +4644,14 @@ async function bootMenu() {
     button.type = "button"
     button.className = "plane-btn"
     button.dataset.index = String(index)
-    button.innerHTML = `<span class="swatch"></span><span><strong>${def.name}</strong><small>${def.role}</small></span><span class="speed">${Math.round(def.flight.cruise * 3.6)} km/h</span>`
-    const colors = loadAirlineColors()
-    button.querySelector(".swatch").style.background = isAirliner(def)
-      ? `linear-gradient(135deg, ${colors.fuselage}, ${colors.primary})`
-      : `linear-gradient(135deg, ${def.body}, ${def.accent})`
-    button.addEventListener("click", () => selectPlane(index))
-    button.addEventListener("dblclick", () => {
-      selectPlane(index)
+    const topSpeed = Math.round(
+      (isCar(def) ? (def.drive?.maxSpeed || 35) : (def.flight?.cruise || 55)) * 3.6
+    )
+    button.innerHTML = `<span class="swatch"></span><span><strong>${def.name}</strong><small>${def.role}</small></span><span class="speed">${topSpeed} km/h</span>`
+    button.querySelector(".swatch").style.background = hangarSwatch(def)
+    button.addEventListener("click", () => { void selectVehicle(index) })
+    button.addEventListener("dblclick", async () => {
+      await selectVehicle(index)
       startFlight()
     })
     list.appendChild(button)
@@ -2379,6 +4687,25 @@ async function bootMenu() {
     refreshAirportUi()
     toast(`Airport renamed: ${world.airportName}`)
   })
+  const redeemFromUi = () => {
+    ensureAudio()
+    const input = document.getElementById("promo-input")
+    const ok = redeemPromo(input?.value)
+    if (ok && input) input.value = ""
+  }
+  document.getElementById("promo-btn")?.addEventListener("click", redeemFromUi)
+  document.getElementById("promo-input")?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault()
+      redeemFromUi()
+    }
+  })
+  document.getElementById("promo-toggle")?.addEventListener("click", () => {
+    setPromoSectionCollapsed(!promoSectionCollapsed())
+  })
+  syncPromoSectionUi()
+  refreshPromoStatus()
+  refreshBanLock()
   bindFlyActions()
   document.getElementById("ap-master").addEventListener("click", () => {
     ensureAudio()
@@ -2390,6 +4717,7 @@ async function bootMenu() {
     else {
       ap.hdg = !ap.hdg
       if (ap.hdg) ap.targetHdg = Math.round(currentHeadingDeg())
+      else clearHomeLand()
       refreshApPanel()
     }
   })
@@ -2399,6 +4727,7 @@ async function bootMenu() {
     else {
       ap.alt = !ap.alt
       if (ap.alt) ap.targetAlt = Math.max(30, Math.round(currentAltM()))
+      else clearHomeLand()
       refreshApPanel()
     }
   })
@@ -2411,6 +4740,10 @@ async function bootMenu() {
       refreshApPanel()
     }
   })
+  document.getElementById("ap-land")?.addEventListener("click", () => {
+    ensureAudio()
+    toggleHomeLand()
+  })
   for (const button of document.querySelectorAll("[data-ap-adj]")) {
     button.addEventListener("click", () => {
       ensureAudio()
@@ -2419,7 +4752,7 @@ async function bootMenu() {
   }
   refreshApPanel()
   renderWxPanel()
-  await restoreWeather()
+  void restoreWeather()
   for (const id of ["airline-primary", "airline-secondary", "airline-fuselage"]) {
     document.getElementById(id).addEventListener("input", () => {
       repaintAirlineFleet(airlineColorsFromInputs())
@@ -2428,15 +4761,50 @@ async function bootMenu() {
   bindHoldButtons()
   bindJoystick()
   bindThrottle()
+  bindCrashScreen()
 
   selectPlane(0)
+  setFailMode(failMode)
+  document.getElementById("fail-modes")?.addEventListener("click", (event) => {
+    const btn = event.target.closest("[data-fail]")
+    if (!btn) return
+    ensureAudio()
+    setFailMode(btn.dataset.fail)
+    toast(failMode === "off" ? "Failures off" : failMode === "hard" ? "Hard failures on" : "Failures on")
+  })
+  document.getElementById("fail-trigger")?.addEventListener("click", () => {
+    ensureAudio()
+    practiceFailure()
+  })
+  document.getElementById("fail-clear")?.addEventListener("click", () => {
+    ensureAudio()
+    clearFailures()
+    refreshFailPanel()
+  })
+  document.getElementById("fail-extinguish")?.addEventListener("click", () => {
+    ensureAudio()
+    extinguishFire()
+  })
   boot.hidden = true
   hangarReady = true
+  bindChatUi()
+  document.getElementById("swap-close")?.addEventListener("click", () => setSwapPanelOpen(false))
+  document.getElementById("swap-panel")?.addEventListener("click", (event) => {
+    if (event.target?.id === "swap-panel") setSwapPanelOpen(false)
+  })
   refreshAirportUi()
+  refreshFailPanel()
   animate()
+  // Heavy world detail + remaining GLBs after the hangar is already usable.
+  setTimeout(() => {
+    try { world?.enrich?.() } catch (error) { console.warn(error) }
+  }, 250)
+  setTimeout(() => {
+    warmAircraftModels(bootIds).catch(() => {})
+  }, 2500)
 }
 
-function beginWithName(name) {
+function beginWithName(name, { multiplayer = false } = {}) {
   playerName = sanitizeName(name)
   try { localStorage.setItem("tfs-player-name", playerName) } catch { /* ignore */ }
   document.getElementById("name-gate").hidden = true
@@ -2444,26 +4812,38 @@ function beginWithName(name) {
   world.setLocalAirport(0, playerName)
   localOrigin = { ...world.localOrigin }
   if (player) place(player, PAD.x, PAD.z, 0.4)
-  for (const craft of parked) {
-    // Keep apron decor near the local pad when offline/before join assigns a slot.
-  }
   place(parked[0], PAD.x - 80, PAD.z + 250, 0.8)
   place(parked[1], PAD.x - 80, PAD.z + 340, -0.4)
   refreshAirportUi()
-  net.connect(playerName)
   const hint = document.getElementById("join-hint")
-  if (hint) {
-    const host = location.host || `127.0.0.1:8765`
-    hint.textContent = location.hostname === "127.0.0.1" || location.hostname === "localhost"
-      ? "Hosting locally — share your Wi‑Fi LAN address with friends (see Terminal)."
-      : `Joined via ${host}`
+  showChatUi()
+  if (multiplayer) {
+    net.connect(playerName)
+    if (hint) {
+      const host = location.host || `127.0.0.1:8765`
+      hint.textContent = location.hostname === "127.0.0.1" || location.hostname === "localhost"
+        ? "Hosting locally — share your Wi‑Fi LAN address with friends (see Terminal)."
+        : `Joined via ${host}`
+    }
+    toast("Multiplayer on — friends on this Wi‑Fi can join.")
+    appendChatLine({ text: "Chat is live — press T to talk.", system: true })
+  } else {
+    net.disconnect?.()
+    if (hint) hint.textContent = "Singleplayer — you are flying alone."
+    toast("Singleplayer — flying alone.")
+    appendChatLine({ text: "Singleplayer — choose Multiplayer next time to chat on Wi‑Fi.", system: true })
   }
 }
 
 async function startApp() {
   menu.hidden = true
+  boot.hidden = true
   const gate = document.getElementById("name-gate")
+  const nameStep = document.getElementById("name-step")
+  const modeStep = document.getElementById("mode-step")
   gate.hidden = false
+  nameStep.hidden = false
+  modeStep.hidden = true
   let saved = ""
   try { saved = localStorage.getItem("tfs-player-name") || "" } catch { /* ignore */ }
   const input = document.getElementById("player-name")
@@ -2471,26 +4851,66 @@ async function startApp() {
   input.focus()
   input.select()
   let submitting = false
-  document.getElementById("name-form").addEventListener("submit", async (event) => {
-    event.preventDefault()
+  let pendingName = ""
+
+  async function enterHangar(multiplayer) {
     if (submitting || hangarReady) return
-    submitting = true
-    const name = sanitizeName(input.value)
+    const name = sanitizeName(pendingName || input.value)
     if (name.length < 2) {
-      submitting = false
       toast("Pick a name with at least 2 letters.")
+      nameStep.hidden = false
+      modeStep.hidden = true
+      input.focus()
       return
     }
+    submitting = true
     gate.hidden = true
     boot.hidden = false
     try {
       await bootMenu()
-      beginWithName(name)
+      beginWithName(name, { multiplayer })
     } catch (error) {
       submitting = false
-      boot.hidden = false
+      gate.hidden = false
+      nameStep.hidden = true
+      modeStep.hidden = false
+      boot.hidden = true
       boot.textContent = error && error.message ? error.message : "The hangar could not open."
       console.error(error)
+    }
+  }
+
+  function showModeStep() {
+    const name = sanitizeName(input.value)
+    if (name.length < 2) {
+      toast("Pick a name with at least 2 letters.")
+      return
+    }
+    pendingName = name
+    nameStep.hidden = true
+    modeStep.hidden = false
+    document.getElementById("mode-single")?.focus()
+  }
+
+  document.getElementById("name-form").addEventListener("submit", (event) => {
+    event.preventDefault()
+    if (submitting || hangarReady) return
+    if (!modeStep.hidden) return
+    showModeStep()
+  })
+  document.getElementById("mode-single")?.addEventListener("click", () => enterHangar(false))
+  document.getElementById("mode-multi")?.addEventListener("click", () => enterHangar(true))
+
+  window.addEventListener("keydown", (event) => {
+    if (gate.hidden || submitting || hangarReady) return
+    if (modeStep.hidden) return
+    if (event.repeat) return
+    if (event.code === "KeyS") {
+      event.preventDefault()
+      enterHangar(false)
+    } else if (event.code === "KeyM") {
+      event.preventDefault()
+      enterHangar(true)
     }
   })
 }
@@ -2508,8 +4928,31 @@ window.addEventListener("resize", () => {
 })
 
 window.addEventListener("keydown", (event) => {
+  // Don't steal keys while typing in chat / promo / rename fields.
+  if (typingInField()) {
+    if (event.code === "Escape" && chatOpen()) {
+      event.preventDefault()
+      setChatOpen(false)
+    }
+    return
+  }
+  if (event.code === "KeyT" && hangarReady && chatRoot && !chatRoot.hidden) {
+    event.preventDefault()
+    setChatOpen(true)
+    return
+  }
+  if (event.code === "Escape" && chatOpen()) {
+    event.preventDefault()
+    setChatOpen(false)
+    return
+  }
+  if (event.code === "Escape" && swapPanelOpen()) {
+    event.preventDefault()
+    setSwapPanelOpen(false)
+    return
+  }
   if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.code)) event.preventDefault()
-  const once = ["KeyG", "KeyF", "KeyO", "KeyP", "KeyU", "KeyN", "KeyL", "KeyC", "KeyR", "KeyM", "KeyB", "KeyJ", "Enter", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]
+  const once = ["KeyG", "KeyF", "KeyO", "KeyP", "KeyU", "KeyN", "KeyL", "KeyC", "KeyR", "KeyM", "KeyB", "KeyH", "KeyJ", "KeyK", "KeyT", "KeyV", "BracketLeft", "BracketRight", "Enter", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]
   if (event.repeat && once.includes(event.code)) return
   keys.add(event.code)
   ensureAudio()
@@ -2521,16 +4964,27 @@ window.addEventListener("keydown", (event) => {
     else if (player) tapPart(player, event.code)
     return
   }
-  if (event.code === "Escape") showMenu()
+  if (event.code === "Escape") {
+    setSwapPanelOpen(false)
+    showMenu()
+  }
   else if (event.code === "KeyR") resetToRunway("Back on the runway.")
   else if (event.code === "KeyC") cycleCamera()
   else if (event.code === "KeyM") toggleMute()
   else if (event.code === "KeyB") toggleAutopilot()
+  else if (event.code === "KeyH") toggleHomeLand()
   else if (event.code === "KeyJ") onJumpKey()
+  else if (event.code === "KeyK") practiceFailure()
+  else if (event.code === "KeyV") setSwapPanelOpen(!swapPanelOpen())
+  else if (event.code === "BracketLeft") void changePlaneInFlight((selected - 1 + FLEET.length) % FLEET.length)
+  else if (event.code === "BracketRight") void changePlaneInFlight((selected + 1) % FLEET.length)
   else if (player && !outside) tapPart(player, event.code)
 })
 
-window.addEventListener("keyup", (event) => keys.delete(event.code))
+window.addEventListener("keyup", (event) => {
+  if (typingInField()) return
+  keys.delete(event.code)
+})
 window.addEventListener("blur", () => {
   keys.clear()
   releaseTouch()
@@ -2649,10 +5103,18 @@ canvas.addEventListener("pointerdown", (event) => {
   lastX = event.clientX
   lastY = event.clientY
   if (isOrbitCam()) orbitAuto = false
+  updateMouseStick(event.clientX, event.clientY, event.pointerType)
 })
 canvas.addEventListener("pointermove", (event) => {
+  // Always track mouse aim while flying, even without a button held.
+  if (!pointers.has(event.pointerId) || pointers.size === 0) {
+    updateMouseStick(event.clientX, event.clientY, event.pointerType)
+  }
   const point = pointers.get(event.pointerId)
-  if (!point) return
+  if (!point) {
+    // Hover-only path already updated mouse stick above.
+    return
+  }
   const dx = event.clientX - point.x
   const dy = event.clientY - point.y
   point.x = event.clientX
@@ -2674,27 +5136,33 @@ canvas.addEventListener("pointermove", (event) => {
     return
   }
   if (dragging && outside) {
+    clearMouseStick()
     walkLookYaw -= dx * 0.0048
     walkLookPitch = THREE.MathUtils.clamp(walkLookPitch - dy * 0.0038, -1.15, 1.05)
     return
   }
   if (dragging && isCockpitCam()) {
+    clearMouseStick()
     cockLookYaw -= dx * 0.0045
     cockLookPitch = THREE.MathUtils.clamp(cockLookPitch - dy * 0.0035, -0.85, 0.7)
     cockLookYaw = THREE.MathUtils.clamp(cockLookYaw, -1.35, 1.35)
     return
   }
   if (dragging && (mode === "menu" || isOrbitCam())) {
+    clearMouseStick()
     orbitYaw -= dx * 0.006
     orbitPitch = THREE.MathUtils.clamp(orbitPitch + dy * 0.004, 0.05, 1.35)
     if (isOrbitCam()) orbitAuto = false
+    return
   }
+  updateMouseStick(event.clientX, event.clientY, event.pointerType)
 })
 canvas.addEventListener("pointerup", (event) => {
   pointers.delete(event.pointerId)
   if (pointers.size < 2) pinchDist = 0
   if (pointers.size > 0) return
   dragging = false
+  updateMouseStick(event.clientX, event.clientY, event.pointerType)
   if (moved > 8) return
   const rect = canvas.getBoundingClientRect()
   const pointer = new THREE.Vector2(
@@ -2721,12 +5189,19 @@ canvas.addEventListener("pointercancel", (event) => {
   pointers.delete(event.pointerId)
   if (pointers.size === 0) dragging = false
   pinchDist = 0
+  clearMouseStick()
+})
+canvas.addEventListener("pointerleave", () => {
+  if (pointers.size === 0) clearMouseStick()
+})
+window.addEventListener("blur", () => {
+  clearMouseStick()
 })
 window.addEventListener("gesturestart", (event) => event.preventDefault())
 window.addEventListener("touchmove", (event) => {
   const el = event.target
   if (!el || !el.closest) return
-  if (el === canvas || el.closest("#controls, #throttle-panel")) event.preventDefault()
+  if (el === canvas || el.closest("#controls, #throttle-panel, #fail-panel")) event.preventDefault()
 }, { passive: false })
 
 canvas.addEventListener("wheel", (event) => {

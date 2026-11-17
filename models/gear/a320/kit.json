@@ -1,0 +1,10 @@
+{
+  "id": "a320",
+  "parts": [
+    "nlg.glb",
+    "nlg_tires.glb",
+    "mlg_left.glb",
+    "mlg_right.glb",
+    "mlg_tires.glb"
+  ]
+}

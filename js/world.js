@@ -2,6 +2,7 @@ import * as THREE from "three"
 import {
   PAD_LOCAL,
   RUNWAY_LOCAL,
+  SLOT_ORIGINS,
   slotOrigin,
   padForSlot,
   towerForSlot,
@@ -14,39 +15,39 @@ export const RUNWAY = { ...RUNWAY_LOCAL }
 export const WORLD_RADIUS = 92000
 export { slotOrigin, padForSlot, towerForSlot, airportLabel }
 
-/** Land disks: [x, z, radius, colorHex, label] — simplified whole-world map. */
+/** Land disks: [x, z, radius, colorHex, label] — muted earth tones (satellite-like). */
 const CONTINENTS = [
   // North America (Turbo Field / home)
-  [-2500, 500, 11000, 0x3e8c45, "North America"],
+  [-2500, 500, 11000, 0x4a6340, "North America"],
   // Greenland
-  [-8000, -22000, 4200, 0xdde8f2, "Greenland"],
+  [-8000, -22000, 4200, 0xd2dde8, "Greenland"],
   // South America
-  [-7000, 22000, 7500, 0x2f7a3a, "South America"],
+  [-7000, 22000, 7500, 0x355a38, "South America"],
   // Europe
-  [14000, -9000, 5200, 0x4a9a55, "Europe"],
+  [14000, -9000, 5200, 0x516848, "Europe"],
   // Africa
-  [12000, 12000, 7800, 0xc4a35a, "Africa"],
+  [12000, 12000, 7800, 0xba8960, "Africa"],
   // Asia (big)
-  [32000, -4000, 12000, 0x5a9a4a, "Asia"],
+  [32000, -4000, 12000, 0x4d6a42, "Asia"],
   // India subcontinent bump
-  [26000, 8000, 3200, 0x6aaa58, "India"],
+  [26000, 8000, 3200, 0x5a7848, "India"],
   // Australia
-  [36000, 22000, 4800, 0xc48a4a, "Australia"],
+  [36000, 22000, 4800, 0xb08a52, "Australia"],
   // Antarctica
-  [2000, 42000, 9000, 0xeaf4ff, "Antarctica"],
+  [2000, 42000, 9000, 0xe4ecf4, "Antarctica"],
   // Japan / Pacific islands
-  [42000, -2000, 1800, 0x4a8f52, "Japan"],
-  [45000, 6000, 900, 0x3d9a6a, "Pacific isle"],
-  [48000, 10000, 700, 0x3d9a6a, "Pacific isle"],
+  [42000, -2000, 1800, 0x456848, "Japan"],
+  [45000, 6000, 900, 0x3d6a52, "Pacific isle"],
+  [48000, 10000, 700, 0x3d6a52, "Pacific isle"],
   // UK / Ireland bump off Europe
-  [9000, -11000, 1400, 0x4a9a55, "UK"],
+  [9000, -11000, 1400, 0x4e6846, "UK"],
   // Caribbean
-  [-2000, 9000, 900, 0x3d9a6a, "Caribbean"],
-  [500, 10000, 600, 0x3d9a6a, "Caribbean"],
+  [-2000, 9000, 900, 0x3d6a52, "Caribbean"],
+  [500, 10000, 600, 0x3d6a52, "Caribbean"],
   // Madagascar
-  [18000, 18000, 1100, 0x3d8a48, "Madagascar"],
+  [18000, 18000, 1100, 0x3a6840, "Madagascar"],
   // New Zealand
-  [42000, 28000, 1600, 0x4a8f52, "New Zealand"],
+  [42000, 28000, 1600, 0x456848, "New Zealand"],
 ]
 
 const WORLD_AIRPORTS = [
@@ -72,42 +73,121 @@ const WORLD_AIRPORTS = [
   [42000, 27000, "AUCKLAND"],
 ]
 
-function grassTexture() {
+function seededNoise(x, y) {
+  const n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453
+  return n - Math.floor(n)
+}
+
+function paintTerrainCanvas(size, base, tones, blotches, speckles) {
   const canvas = document.createElement("canvas")
-  canvas.width = 512
-  canvas.height = 512
+  canvas.width = size
+  canvas.height = size
   const ctx = canvas.getContext("2d")
-  ctx.fillStyle = "#3e8c45"
-  ctx.fillRect(0, 0, 512, 512)
-  for (let i = 0; i < 2200; i += 1) {
-    ctx.fillStyle = i % 2 ? "#357a3c" : "#4f9d52"
-    ctx.fillRect(Math.random() * 512, Math.random() * 512, 2, 3)
+  ctx.fillStyle = base
+  ctx.fillRect(0, 0, size, size)
+  for (let i = 0; i < blotches; i += 1) {
+    const x = seededNoise(i, 1.7) * size
+    const y = seededNoise(i, 3.1) * size
+    const r = 8 + seededNoise(i, 5.9) * size * 0.18
+    const grad = ctx.createRadialGradient(x, y, 0, x, y, r)
+    const tone = tones[i % tones.length]
+    grad.addColorStop(0, tone)
+    grad.addColorStop(1, "rgba(0,0,0,0)")
+    ctx.fillStyle = grad
+    ctx.beginPath()
+    ctx.arc(x, y, r, 0, Math.PI * 2)
+    ctx.fill()
   }
+  for (let i = 0; i < speckles; i += 1) {
+    ctx.fillStyle = tones[i % tones.length]
+    ctx.globalAlpha = 0.35
+    ctx.fillRect(seededNoise(i, 9.2) * size, seededNoise(i, 11.4) * size, 1 + (i % 3), 1 + (i % 2))
+  }
+  ctx.globalAlpha = 1
   const texture = new THREE.CanvasTexture(canvas)
   texture.colorSpace = THREE.SRGBColorSpace
   texture.wrapS = THREE.RepeatWrapping
   texture.wrapT = THREE.RepeatWrapping
-  texture.repeat.set(140, 140)
+  texture.anisotropy = 8
+  return texture
+}
+
+function grassTexture() {
+  const texture = paintTerrainCanvas(
+    256,
+    "#4a6340",
+    ["rgba(58,90,52,0.55)", "rgba(72,108,60,0.5)", "rgba(90,118,70,0.4)", "rgba(40,70,42,0.45)"],
+    48,
+    900
+  )
+  texture.repeat.set(90, 90)
+  return texture
+}
+
+function forestTexture() {
+  const texture = paintTerrainCanvas(
+    256,
+    "#355a38",
+    ["rgba(40,70,42,0.55)", "rgba(58,88,50,0.45)", "rgba(28,55,34,0.5)", "rgba(70,95,55,0.35)"],
+    55,
+    800
+  )
+  texture.repeat.set(70, 70)
   return texture
 }
 
 function desertTexture() {
+  const texture = paintTerrainCanvas(
+    256,
+    "#b89660",
+    ["rgba(168,130,78,0.5)", "rgba(196,160,110,0.45)", "rgba(140,108,64,0.4)", "rgba(210,180,130,0.35)"],
+    40,
+    700
+  )
+  texture.repeat.set(55, 55)
+  return texture
+}
+
+function iceTexture() {
+  const texture = paintTerrainCanvas(
+    256,
+    "#d8e2ec",
+    ["rgba(240,246,252,0.55)", "rgba(190,205,220,0.45)", "rgba(210,222,232,0.4)", "rgba(255,255,255,0.35)"],
+    36,
+    500
+  )
+  texture.repeat.set(40, 40)
+  return texture
+}
+
+function oceanNormalTexture() {
   const canvas = document.createElement("canvas")
   canvas.width = 256
   canvas.height = 256
   const ctx = canvas.getContext("2d")
-  ctx.fillStyle = "#d2b48c"
+  ctx.fillStyle = "#8080ff"
   ctx.fillRect(0, 0, 256, 256)
-  for (let i = 0; i < 800; i += 1) {
-    ctx.fillStyle = i % 2 ? "#c4a574" : "#e0c9a0"
-    ctx.fillRect(Math.random() * 256, Math.random() * 256, 3, 2)
+  for (let i = 0; i < 1400; i += 1) {
+    const x = seededNoise(i, 2.2) * 256
+    const y = seededNoise(i, 4.4) * 256
+    const g = 110 + Math.floor(seededNoise(i, 6.6) * 40)
+    const b = 180 + Math.floor(seededNoise(i, 8.8) * 50)
+    ctx.fillStyle = `rgb(${g},${g},${b})`
+    ctx.fillRect(x, y, 2, 1)
   }
   const texture = new THREE.CanvasTexture(canvas)
-  texture.colorSpace = THREE.SRGBColorSpace
   texture.wrapS = THREE.RepeatWrapping
   texture.wrapT = THREE.RepeatWrapping
-  texture.repeat.set(40, 40)
+  texture.repeat.set(220, 220)
   return texture
+}
+
+function groundMaterial(opts) {
+  const mat = new THREE.MeshStandardMaterial(opts)
+  mat.polygonOffset = true
+  mat.polygonOffsetFactor = -1
+  mat.polygonOffsetUnits = -2
+  return mat
 }
 
 function makeSign(text) {
@@ -138,22 +218,200 @@ function addTree(instances, index, x, z, scale) {
   instances.setMatrixAt(index, dummy.matrix)
 }
 
-function addMountain(scene, obstacles, x, z, radius, height, color, snow) {
-  const mesh = new THREE.Mesh(
-    new THREE.ConeGeometry(radius, height, 7),
-    new THREE.MeshStandardMaterial({ color, roughness: 1 })
-  )
-  mesh.position.set(x, height / 2 - 8, z)
-  scene.add(mesh)
-  if (snow) {
-    const cap = new THREE.Mesh(
-      new THREE.SphereGeometry(radius * 0.28, 10, 8),
-      new THREE.MeshStandardMaterial({ color: 0xf4f7fb, roughness: 0.8 })
-    )
-    cap.position.set(x, height - 20, z)
-    scene.add(cap)
+function fbmNoise(x, y, octaves = 4) {
+  let sum = 0
+  let amp = 0.5
+  let freq = 1
+  for (let i = 0; i < octaves; i += 1) {
+    sum += (seededNoise(x * freq, y * freq) * 2 - 1) * amp
+    amp *= 0.5
+    freq *= 2.05
   }
-  obstacles.push({ name: "mountain", type: "cone", x, z, r: radius * 0.72, h: height })
+  return sum
+}
+
+function ridgedNoise(x, y, octaves = 4) {
+  let sum = 0
+  let amp = 0.5
+  let freq = 1
+  for (let i = 0; i < octaves; i += 1) {
+    const n = 1 - Math.abs(seededNoise(x * freq, y * freq) * 2 - 1)
+    sum += n * n * amp
+    amp *= 0.5
+    freq *= 2.15
+  }
+  return sum
+}
+
+function rockTexture() {
+  const texture = paintTerrainCanvas(
+    256,
+    "#6a6862",
+    [
+      "rgba(90,88,82,0.55)",
+      "rgba(110,108,100,0.45)",
+      "rgba(70,72,68,0.5)",
+      "rgba(130,125,118,0.35)",
+      "rgba(55,58,52,0.4)",
+    ],
+    50,
+    700
+  )
+  texture.repeat.set(6, 6)
+  return texture
+}
+
+let sharedRockMap = null
+function getRockMap() {
+  if (!sharedRockMap) sharedRockMap = rockTexture()
+  return sharedRockMap
+}
+
+function hexToRgb(hex) {
+  return {
+    r: ((hex >> 16) & 255) / 255,
+    g: ((hex >> 8) & 255) / 255,
+    b: (hex & 255) / 255,
+  }
+}
+
+/** Build a radial heightfield mountain (not a cone) with ridges, foothills, and snow. */
+function createMountainGeometry(radius, height, seed, opts = {}) {
+  const segments = opts.segments || 96
+  const snowLine = opts.snowLine ?? 0.62
+  const rock = hexToRgb(opts.color ?? 0x6a7068)
+  const grass = hexToRgb(opts.grass ?? 0x4a5e3a)
+  const snow = { r: 0.93, g: 0.95, b: 0.97 }
+  const crater = opts.crater || 0
+  const geo = new THREE.PlaneGeometry(radius * 2.2, radius * 2.2, segments, segments)
+  geo.rotateX(-Math.PI / 2)
+  const pos = geo.attributes.position
+  const colors = new Float32Array(pos.count * 3)
+  const ridgeDir = seededNoise(seed, 0.3) * Math.PI
+  const cx = Math.cos(ridgeDir)
+  const cz = Math.sin(ridgeDir)
+
+  for (let i = 0; i < pos.count; i += 1) {
+    const px = pos.getX(i)
+    const pz = pos.getZ(i)
+    const nx = px / radius
+    const nz = pz / radius
+    const dist = Math.hypot(nx, nz)
+    let y = 0
+    if (dist < 1.08) {
+      const fall = Math.pow(Math.max(0, 1 - dist / 1.05), 1.35)
+      const ridge = Math.abs(nx * cx + nz * cz)
+      const along = -nx * cz + nz * cx
+      const spine = Math.exp(-ridge * ridge * 7.5) * (0.55 + 0.45 * (1 - Math.abs(along) * 0.35))
+      const detail =
+        ridgedNoise(nx * 2.4 + seed, nz * 2.4 + seed * 1.3, 5) * 0.55 +
+        fbmNoise(nx * 5.5 + seed * 2.1, nz * 5.5 + seed * 0.7, 3) * 0.22
+      // Secondary peaks / foothills
+      const foothill =
+        Math.exp(-Math.hypot(nx - 0.42, nz + 0.28) * 4.2) * 0.28 +
+        Math.exp(-Math.hypot(nx + 0.38, nz - 0.22) * 4.8) * 0.22 +
+        Math.exp(-Math.hypot(nx - 0.15, nz - 0.48) * 5.5) * 0.18
+      y = height * fall * (0.28 + spine * 0.42 + detail * 0.38 + foothill)
+      if (crater > 0 && dist < crater) {
+        const t = dist / crater
+        y *= 0.35 + t * t * 0.65
+        y -= height * 0.08 * (1 - t)
+      }
+      // Flatten skirt so it meets the ground without a hard cliff edge
+      if (dist > 0.88) y *= Math.max(0, 1 - (dist - 0.88) / 0.2)
+    }
+    pos.setY(i, Math.max(0, y))
+
+    const elev = height > 0 ? y / height : 0
+    // Approximate slope from local noise gradient
+    const slope =
+      Math.abs(fbmNoise(nx * 6 + seed, nz * 6 + seed, 2)) * 0.65 +
+      Math.min(1, elev * 1.4) * 0.35
+    let cr
+    let cg
+    let cb
+    if (opts.snow && elev > snowLine) {
+      const t = Math.min(1, (elev - snowLine) / (1 - snowLine + 0.001))
+      const mix = Math.pow(t, 0.7) * (0.55 + slope * 0.45)
+      cr = rock.r + (snow.r - rock.r) * mix
+      cg = rock.g + (snow.g - rock.g) * mix
+      cb = rock.b + (snow.b - rock.b) * mix
+    } else if (elev < 0.22 && slope < 0.55) {
+      const t = 1 - elev / 0.22
+      cr = rock.r + (grass.r - rock.r) * t * 0.85
+      cg = rock.g + (grass.g - rock.g) * t * 0.85
+      cb = rock.b + (grass.b - rock.b) * t * 0.85
+    } else {
+      const shade = 0.82 + fbmNoise(nx * 8 + seed, nz * 8, 2) * 0.18
+      cr = rock.r * shade
+      cg = rock.g * shade
+      cb = rock.b * shade
+    }
+    colors[i * 3] = cr
+    colors[i * 3 + 1] = cg
+    colors[i * 3 + 2] = cb
+  }
+
+  geo.setAttribute("color", new THREE.BufferAttribute(colors, 3))
+  geo.computeVertexNormals()
+  return geo
+}
+
+function addMountain(scene, obstacles, x, z, radius, height, color, snow, extra = {}) {
+  const seed = Math.abs(x * 0.013 + z * 0.007) % 100
+  const geo = createMountainGeometry(radius, height, seed, {
+    color,
+    snow,
+    snowLine: extra.snowLine ?? (snow ? 0.58 : 1.2),
+    grass: extra.grass ?? 0x4a5e3a,
+    crater: extra.crater || 0,
+    segments: extra.segments || (radius > 600 ? 56 : 40),
+  })
+  const mat = new THREE.MeshStandardMaterial({
+    vertexColors: true,
+    map: getRockMap(),
+    roughness: 0.94,
+    metalness: 0.04,
+    envMapIntensity: 0.25,
+  })
+  // Multiply rock map lightly over vertex colors
+  mat.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <map_fragment>",
+      `
+      #ifdef USE_MAP
+        vec4 sampledDiffuseColor = texture2D( map, vMapUv );
+        diffuseColor.rgb *= mix(vec3(1.0), sampledDiffuseColor.rgb, 0.45);
+      #endif
+      `
+    )
+  }
+  const mesh = new THREE.Mesh(geo, mat)
+  mesh.position.set(x, -2, z)
+  mesh.castShadow = true
+  mesh.receiveShadow = true
+  scene.add(mesh)
+
+  // Soft debris / talus ring so the base doesn't look cut out of a disk
+  if (!extra.noSkirt) {
+    const skirt = new THREE.Mesh(
+      new THREE.RingGeometry(radius * 0.72, radius * 1.15, 48),
+      new THREE.MeshStandardMaterial({
+        color: new THREE.Color(color).lerp(new THREE.Color(extra.grass ?? 0x4a5e3a), 0.35),
+        roughness: 1,
+        transparent: true,
+        opacity: 0.85,
+        depthWrite: false,
+      })
+    )
+    skirt.rotation.x = -Math.PI / 2
+    skirt.position.set(x, 0.06, z)
+    skirt.receiveShadow = true
+    scene.add(skirt)
+  }
+
+  obstacles.push({ name: "mountain", type: "cone", x, z, r: radius * 0.78, h: height })
+  return mesh
 }
 
 function addCity(scene, obstacles, cx, cz, count, palette) {
@@ -168,30 +426,32 @@ function addCity(scene, obstacles, cx, cz, count, palette) {
       new THREE.BoxGeometry(w, h, d),
       new THREE.MeshStandardMaterial({
         color: palette[i % palette.length],
-        roughness: 0.55,
-        metalness: 0.12,
+        roughness: 0.72,
+        metalness: 0.18,
+        envMapIntensity: 0.55,
       })
     )
     mesh.position.set(x, h / 2, z)
     mesh.castShadow = true
+    mesh.receiveShadow = true
     scene.add(mesh)
     obstacles.push({ name: "city", type: "cylinder", x, z, r: Math.max(w, d) * 0.45, h })
   }
 }
 
 function addAirport(scene, obstacles, ox, oz, label) {
-  const asphalt = new THREE.MeshStandardMaterial({ color: 0x3a404a, roughness: 0.88 })
+  const asphalt = groundMaterial({ color: 0x343940, roughness: 0.9 })
   const strip = new THREE.Mesh(new THREE.PlaneGeometry(40, 1400), asphalt)
   strip.rotation.x = -Math.PI / 2
-  strip.position.set(ox, 0.04, oz + 700)
+  strip.position.set(ox, 0.18, oz + 700)
   strip.receiveShadow = true
   scene.add(strip)
   const apron = new THREE.Mesh(
     new THREE.PlaneGeometry(220, 280),
-    new THREE.MeshStandardMaterial({ color: 0x9aa1aa, roughness: 0.92 })
+    groundMaterial({ color: 0x8e959e, roughness: 0.94 })
   )
   apron.rotation.x = -Math.PI / 2
-  apron.position.set(ox - 140, 0.03, oz + 180)
+  apron.position.set(ox - 140, 0.14, oz + 180)
   scene.add(apron)
   const tower = new THREE.Mesh(
     new THREE.CylinderGeometry(2.4, 3.2, 34, 10),
@@ -210,8 +470,10 @@ function addAirport(scene, obstacles, ox, oz, label) {
 export function createWorld(scene) {
   const obstacles = []
   const roads = []
-  const roadMat = new THREE.MeshStandardMaterial({ color: 0x3d4248, roughness: 0.95 })
-  const roadDashMat = new THREE.MeshBasicMaterial({ color: 0xf0f0f0 })
+  const roadMat = groundMaterial({ color: 0x3a3f45, roughness: 0.96 })
+  const roadDashMat = groundMaterial({ color: 0xe8e6df, roughness: 1, metalness: 0 })
+  roadDashMat.polygonOffsetFactor = -2
+  roadDashMat.polygonOffsetUnits = -4
   const HIGHWAY_CX = -400
   const HIGHWAY_CZ = 800
   const HIGHWAY_R = 6200
@@ -263,31 +525,54 @@ export function createWorld(scene) {
   }
 
   // —— Whole-world ocean ——
+  const oceanMap = oceanNormalTexture()
   const ocean = new THREE.Mesh(
-    new THREE.CircleGeometry(WORLD_RADIUS, 128),
-    new THREE.MeshStandardMaterial({ color: 0x0f5f8c, roughness: 0.28, metalness: 0.2 })
+    new THREE.CircleGeometry(WORLD_RADIUS, 64),
+    new THREE.MeshStandardMaterial({
+      color: 0x0a4a6e,
+      roughness: 0.18,
+      metalness: 0.35,
+      envMapIntensity: 1.15,
+      normalMap: oceanMap,
+      normalScale: new THREE.Vector2(0.35, 0.35),
+    })
   )
   ocean.rotation.x = -Math.PI / 2
-  ocean.position.y = -0.25
+  ocean.position.y = -1.6
+  ocean.receiveShadow = true
   scene.add(ocean)
 
   const landDisks = []
   const grassMap = grassTexture()
+  const forestMap = forestTexture()
   const sandMap = desertTexture()
+  const snowMap = iceTexture()
   for (const [x, z, r, color, label] of CONTINENTS) {
     const isHome = label === "North America"
     const isDesert = label === "Africa" || label === "Australia"
     const isIce = label === "Antarctica" || label === "Greenland"
-    const mat = new THREE.MeshStandardMaterial({
-      color: isHome || (!isDesert && !isIce) ? 0xffffff : color,
-      map: isHome ? grassMap : isDesert ? sandMap : null,
-      roughness: isIce ? 0.45 : 1,
-      metalness: isIce ? 0.08 : 0,
+    const isForest = label === "South America" || label === "Madagascar"
+    let map = grassMap
+    if (isDesert) map = sandMap
+    else if (isIce) map = snowMap
+    else if (isForest) map = forestMap
+    else if (isHome) map = grassMap
+    const mat = groundMaterial({
+      // Maps already carry biome color; keep tint near-white so they don't go muddy.
+      color: map ? 0xffffff : color,
+      map,
+      roughness: isIce ? 0.42 : 0.95,
+      metalness: isIce ? 0.12 : 0,
+      envMapIntensity: isIce ? 0.55 : 0.2,
     })
-    if (!isHome && !isDesert) mat.color.setHex(color)
-    const land = new THREE.Mesh(new THREE.CircleGeometry(r, Math.max(24, Math.min(72, Math.floor(r / 120)))), mat)
+    mat.polygonOffsetFactor = 1
+    mat.polygonOffsetUnits = 1
+    const land = new THREE.Mesh(
+      new THREE.CircleGeometry(r, Math.max(36, Math.min(96, Math.floor(r / 90)))),
+      mat
+    )
     land.rotation.x = -Math.PI / 2
-    land.position.set(x, 0.02, z)
+    land.position.set(x, 0, z)
     land.receiveShadow = true
     scene.add(land)
     landDisks.push({ x, z, r: r * 0.92, label })
@@ -302,20 +587,29 @@ export function createWorld(scene) {
   // Home Atlantic beach strip — kept east of Turbo Field, not under player pads.
   const sand = new THREE.Mesh(
     new THREE.PlaneGeometry(140, 14000),
-    new THREE.MeshStandardMaterial({ color: 0xd9c48a, roughness: 1 })
+    groundMaterial({ color: 0xcbb888, roughness: 1, map: sandMap })
   )
   sand.rotation.x = -Math.PI / 2
-  sand.position.set(520, 0.025, 500)
+  sand.position.set(520, 0.12, 500)
   sand.receiveShadow = true
   scene.add(sand)
 
   const water = new THREE.Mesh(
     new THREE.PlaneGeometry(9000, 14000),
-    new THREE.MeshStandardMaterial({ color: 0x1c7eae, roughness: 0.25, metalness: 0.15 })
+    new THREE.MeshStandardMaterial({
+      color: 0x156a92,
+      roughness: 0.16,
+      metalness: 0.32,
+      envMapIntensity: 1.05,
+      normalMap: oceanMap,
+      normalScale: new THREE.Vector2(0.45, 0.45),
+    })
   )
   water.rotation.x = -Math.PI / 2
   // Starts past the beach so slot airports on land stay dry visually.
-  water.position.set(8200, -0.05, 500)
+  // Fixed height (no bobbing) — vertical motion against the ocean caused flicker.
+  water.position.set(8200, -0.85, 500)
+  water.receiveShadow = true
   scene.add(water)
 
   // Player airports (multiplayer slots) — built on demand via ensureAirport.
@@ -351,55 +645,58 @@ export function createWorld(scene) {
     // Grass plateau under the pad so coasts never look like open ocean.
     const plateau = new THREE.Mesh(
       new THREE.CircleGeometry(900, 48),
-      new THREE.MeshStandardMaterial({ color: 0x3e8c45, roughness: 1 })
+      groundMaterial({ color: 0xffffff, map: grassMap, roughness: 0.95 })
     )
+    plateau.material.polygonOffsetFactor = -1
     plateau.rotation.x = -Math.PI / 2
-    plateau.position.set(ox - 80, 0.015, oz + 700)
+    plateau.position.set(ox - 80, 0.08, oz + 700)
     plateau.receiveShadow = true
     group.add(plateau)
 
     const apron = new THREE.Mesh(
       new THREE.PlaneGeometry(340, 720),
-      new THREE.MeshStandardMaterial({ color: 0x9aa1aa, roughness: 0.92 })
+      groundMaterial({ color: 0x8e959e, roughness: 0.94 })
     )
     apron.rotation.x = -Math.PI / 2
-    apron.position.set(ox - 200, 0.03, oz + 320)
+    apron.position.set(ox - 200, 0.16, oz + 320)
     apron.receiveShadow = true
     group.add(apron)
 
     const taxi = new THREE.Mesh(
       new THREE.PlaneGeometry(150, 22),
-      new THREE.MeshStandardMaterial({ color: 0x6d737c, roughness: 0.9 })
+      groundMaterial({ color: 0x5f656e, roughness: 0.92 })
     )
     taxi.rotation.x = -Math.PI / 2
-    taxi.position.set(ox - 70, 0.045, oz + 200)
+    taxi.position.set(ox - 70, 0.2, oz + 200)
     taxi.receiveShadow = true
     group.add(taxi)
 
-    const asphalt = new THREE.MeshStandardMaterial({ color: 0x3a404a, roughness: 0.88 })
+    const asphalt = groundMaterial({ color: 0x343940, roughness: 0.9 })
     const runway = new THREE.Mesh(new THREE.PlaneGeometry(48, 2000), asphalt)
     runway.rotation.x = -Math.PI / 2
-    runway.position.set(ox, 0.05, oz + 1000)
+    runway.position.set(ox, 0.22, oz + 1000)
     runway.receiveShadow = true
     group.add(runway)
 
-    const paint = new THREE.MeshBasicMaterial({ color: 0xf4f4f4 })
+    const paint = groundMaterial({ color: 0xeeeae0, roughness: 1, metalness: 0 })
+    paint.polygonOffsetFactor = -3
+    paint.polygonOffsetUnits = -6
     for (const side of [-1, 1]) {
       const edge = new THREE.Mesh(new THREE.PlaneGeometry(0.45, 1960), paint)
       edge.rotation.x = -Math.PI / 2
-      edge.position.set(ox + side * 22, 0.07, oz + 1000)
+      edge.position.set(ox + side * 22, 0.28, oz + 1000)
       group.add(edge)
     }
     for (let z = 50; z < 1960; z += 54) {
       const dash = new THREE.Mesh(new THREE.PlaneGeometry(0.55, 26), paint)
       dash.rotation.x = -Math.PI / 2
-      dash.position.set(ox, 0.07, oz + z)
+      dash.position.set(ox, 0.28, oz + z)
       group.add(dash)
     }
     for (const z of [36, 1964]) {
       const bar = new THREE.Mesh(new THREE.PlaneGeometry(40, 8), paint)
       bar.rotation.x = -Math.PI / 2
-      bar.position.set(ox, 0.08, oz + z)
+      bar.position.set(ox, 0.3, oz + z)
       group.add(bar)
     }
 
@@ -407,7 +704,7 @@ export function createWorld(scene) {
     number.rotation.x = -Math.PI / 2
     number.rotation.z = Math.PI
     number.scale.set(0.55, 0.55, 0.55)
-    number.position.set(ox, 0.09, oz + 130)
+    number.position.set(ox, 0.32, oz + 130)
     group.add(number)
 
     const sign = makeSign(label)
@@ -497,9 +794,9 @@ export function createWorld(scene) {
   }
 
   // Highway ring around home continent (registered in roads[] for driving).
-  for (let i = 0; i < 48; i += 1) {
-    const a0 = (i / 48) * Math.PI * 2
-    const a1 = ((i + 1) / 48) * Math.PI * 2
+  for (let i = 0; i < 24; i += 1) {
+    const a0 = (i / 24) * Math.PI * 2
+    const a1 = ((i + 1) / 24) * Math.PI * 2
     const x0 = Math.cos(a0) * HIGHWAY_R + HIGHWAY_CX
     const z0 = Math.sin(a0) * HIGHWAY_R + HIGHWAY_CZ
     const x1 = Math.cos(a1) * HIGHWAY_R + HIGHWAY_CX
@@ -510,23 +807,18 @@ export function createWorld(scene) {
   // Seed slot 0 so the hangar has a field before join completes.
   ensureAirport(0, "Turbo")
 
-  // Scenic airports across the whole world (not player pads)
-  for (const [ox, oz, label] of WORLD_AIRPORTS) {
-    addAirport(scene, obstacles, ox, oz, label)
-  }
-
-  // Trees near home runway
+  // Fast hangar path: nearby trees + a few clouds. Heavy scenery loads in enrich().
   const trunkGeo = new THREE.CylinderGeometry(0.25, 0.35, 2.2, 5)
   const leafGeo = new THREE.ConeGeometry(1.6, 4.2, 6)
-  const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6b4f32 })
-  const leafMat = new THREE.MeshStandardMaterial({ color: 0x2f7d32 })
+  const trunkMat = new THREE.MeshStandardMaterial({ color: 0x5a4632, roughness: 0.95 })
+  const leafMat = new THREE.MeshStandardMaterial({ color: 0x2f5a32, roughness: 0.88 })
   const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, 280)
   const leaves = new THREE.InstancedMesh(leafGeo, leafMat, 280)
   let treeIndex = 0
-  for (let z = 0; z < 2000 && treeIndex < 150; z += 32) {
+  for (let z = 0; z < 2000 && treeIndex < 90; z += 40) {
     if (z > 120 && z < 300) continue
     for (const side of [-1, 1]) {
-      if (treeIndex >= 150) break
+      if (treeIndex >= 90) break
       const x = side * (70 + Math.random() * 18)
       addTree(trunks, treeIndex, x, z + Math.random() * 8, 1)
       const leafDummy = new THREE.Object3D()
@@ -537,18 +829,6 @@ export function createWorld(scene) {
       treeIndex += 1
     }
   }
-  // Jungle island trees (sparse markers)
-  for (let i = 0; i < 80 && treeIndex < 280; i += 1) {
-    const x = -12000 + (Math.random() - 0.5) * 3000
-    const z = 4000 + (Math.random() - 0.5) * 3000
-    addTree(trunks, treeIndex, x, z, 1.4 + Math.random())
-    const leafDummy = new THREE.Object3D()
-    leafDummy.position.set(x, 4.2, z)
-    leafDummy.scale.set(1.5, 1.2, 1.5)
-    leafDummy.updateMatrix()
-    leaves.setMatrixAt(treeIndex, leafDummy.matrix)
-    treeIndex += 1
-  }
   trunks.count = treeIndex
   leaves.count = treeIndex
   trunks.instanceMatrix.needsUpdate = true
@@ -557,201 +837,185 @@ export function createWorld(scene) {
   leaves.castShadow = true
   scene.add(trunks, leaves)
 
-  // Mountain ranges on every continent
-  const peaks = [
-    // Rockies / Appalachians
-    [180, 3600, 560, 720, 0x6d7270, true],
-    [-1600, 2400, 480, 560, 0x66706a, true],
-    [-18000, -2000, 700, 900, 0x6a7068, true],
-    [-12000, 1000, 500, 640, 0x556b58, true],
-    // Andes
-    [-9000, 18000, 600, 1100, 0x5a6a5e, true],
-    [-7500, 24000, 520, 980, 0x4a5a50, true],
-    // Alps / Europe
-    [13000, -8500, 400, 720, 0x7d7468, true],
-    [16000, -7000, 350, 600, 0x6a7068, true],
-    // Atlas / Africa
-    [9000, 9000, 500, 700, 0x8a7355, false],
-    [14000, 14000, 600, 820, 0x9a8060, false],
-    // Himalayas
-    [28000, -1000, 900, 1600, 0xb8c8d8, true],
-    [30000, 500, 700, 1400, 0xc5d4e0, true],
-    [26000, 2000, 550, 1100, 0xa8b8c8, true],
-    // Australia
-    [34000, 20000, 450, 560, 0xa65a30, false],
-    // Antarctica
-    [0, 40000, 1000, 900, 0xe8f0f8, true],
-    [4000, 43000, 700, 700, 0xd8e4f0, true],
-    // Japan volcanoes
-    [42000, -1500, 400, 900, 0x4a3a32, false],
-    [42500, -500, 320, 700, 0x3a2a22, false],
-  ]
-  for (const [x, z, r, h, c, snow] of peaks) addMountain(scene, obstacles, x, z, r, h, c, snow)
-
-  // Mount Fuji-style volcano
-  const volcano = new THREE.Mesh(
-    new THREE.ConeGeometry(420, 1100, 8),
-    new THREE.MeshStandardMaterial({ color: 0x3a2a22, roughness: 1 })
-  )
-  volcano.position.set(42200, 540, -800)
-  scene.add(volcano)
-  const lava = new THREE.Mesh(
-    new THREE.SphereGeometry(90, 10, 8),
-    new THREE.MeshBasicMaterial({ color: 0xff4a12 })
-  )
-  lava.position.set(42200, 1080, -800)
-  scene.add(lava)
-  obstacles.push({ name: "volcano", type: "cone", x: 42200, z: -800, r: 320, h: 1100 })
-
-  // Egypt pyramids
-  for (const [x, z] of [[10800, -3000], [11200, -2600], [10400, -2500]]) {
-    const pyr = new THREE.Mesh(
-      new THREE.ConeGeometry(90, 160, 4),
-      new THREE.MeshStandardMaterial({ color: 0xd4b896, roughness: 1 })
-    )
-    pyr.position.set(x, 70, z)
-    pyr.rotation.y = Math.PI / 4
-    scene.add(pyr)
-    obstacles.push({ name: "pyramid", type: "cone", x, z, r: 70, h: 160 })
-  }
-
-  // Coastal lighthouse
-  const lightTower = new THREE.Mesh(
-    new THREE.CylinderGeometry(4, 5, 48, 10),
-    new THREE.MeshStandardMaterial({ color: 0xf2f0ea })
-  )
-  lightTower.position.set(560, 24, -40)
-  const lightCap = new THREE.Mesh(
-    new THREE.CylinderGeometry(6, 6, 6, 10),
-    new THREE.MeshBasicMaterial({ color: 0xffe066 })
-  )
-  lightCap.position.set(560, 50, -40)
-  scene.add(lightTower, lightCap)
-  obstacles.push({ name: "lighthouse", type: "cylinder", x: 560, z: -40, r: 8, h: 52 })
-
-  // Long bridge across a bay
-  const bridge = new THREE.Mesh(
-    new THREE.BoxGeometry(18, 4, 900),
-    new THREE.MeshStandardMaterial({ color: 0x6a727c, metalness: 0.35, roughness: 0.55 })
-  )
-  bridge.position.set(900, 18, 4200)
-  scene.add(bridge)
-  for (const z of [3900, 4200, 4500]) {
-    const pier = new THREE.Mesh(
-      new THREE.CylinderGeometry(3, 4, 20, 8),
-      new THREE.MeshStandardMaterial({ color: 0x555a60 })
-    )
-    pier.position.set(900, 8, z)
-    scene.add(pier)
-  }
-
-  // Cities on every continent
-  const urban = [0xcfd6df, 0xb7c3ce, 0x9fb0c2, 0xd7c4a3, 0xa8b5c0]
-  addCity(scene, obstacles, -980, 2500, 28, urban)
-  addCity(scene, obstacles, 400, 2800, 18, urban)
-  addCity(scene, obstacles, -15000, 1800, 22, urban)
-  addCity(scene, obstacles, -11000, 5000, 16, [0x9ec9a0, 0xb8d4b0, 0x7aa87c])
-  addCity(scene, obstacles, -8500, 21000, 18, urban)
-  addCity(scene, obstacles, 14500, -8200, 24, urban)
-  addCity(scene, obstacles, 10500, -9200, 20, urban)
-  addCity(scene, obstacles, 11500, 11000, 16, [0xe8d5b7, 0xd4c0a0, 0xc9b896])
-  addCity(scene, obstacles, 31000, -5000, 26, urban)
-  addCity(scene, obstacles, 39500, -1200, 22, urban)
-  addCity(scene, obstacles, 37000, 21000, 18, [0xd8a878, 0xc09060, 0xa87848])
-  addCity(scene, obstacles, 27000, 7500, 16, urban)
-  addCity(scene, obstacles, 5000, 8500, 14, urban)
-  addCity(scene, obstacles, 14000, 17500, 12, urban)
-
-  // Boats / freighters on the seas
-  const boatMat = new THREE.MeshStandardMaterial({ color: 0xf7f7f2 })
-  const boatSpots = [
-    [700, 400], [980, -200], [1400, 900], [4000, 2000], [8000, -3000],
-    [-9000, 6000], [3000, 11000], [-5000, -9000], [15000, 2000], [-2000, 16000],
-    [18000, 12000], [-20000, 2000], [6000, -18000], [-14000, -14000], [28000, 6000],
-  ]
-  for (const spot of boatSpots) {
-    const boat = new THREE.Mesh(new THREE.BoxGeometry(22, 5, 8), boatMat)
-    boat.position.set(spot[0], 1.8, spot[1])
-    const cabin = new THREE.Mesh(
-      new THREE.BoxGeometry(8, 4, 5),
-      new THREE.MeshStandardMaterial({ color: 0x1d3557 })
-    )
-    cabin.position.set(spot[0] + 3, 5, spot[1])
-    scene.add(boat, cabin)
-  }
-
-  // Oil platforms
-  for (const [x, z] of [[6000, 4000], [-7000, 9000], [12000, 10000], [16000, -8000], [-24000, 8000]]) {
-    const deck = new THREE.Mesh(
-      new THREE.BoxGeometry(40, 4, 40),
-      new THREE.MeshStandardMaterial({ color: 0x8a9098, metalness: 0.5 })
-    )
-    deck.position.set(x, 8, z)
-    const leg = new THREE.Mesh(
-      new THREE.CylinderGeometry(2, 2.5, 16, 8),
-      new THREE.MeshStandardMaterial({ color: 0x555a60 })
-    )
-    leg.position.set(x, 0, z)
-    const flare = new THREE.Mesh(
-      new THREE.SphereGeometry(3, 8, 6),
-      new THREE.MeshBasicMaterial({ color: 0xff7a2a })
-    )
-    flare.position.set(x + 12, 22, z)
-    scene.add(deck, leg, flare)
-    obstacles.push({ name: "platform", type: "cylinder", x, z, r: 28, h: 24 })
-  }
-
-  // Cloud layer across the whole planet
+  let volcanoPos = { x: 44500, z: -200 }
   const clouds = []
-  const cloudMat = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
+  const cloudMat = new THREE.MeshLambertMaterial({
+    color: 0xe8eef4,
     transparent: true,
-    opacity: 0.88,
-    roughness: 1,
+    opacity: 0.55,
+    depthWrite: false,
   })
-  for (let i = 0; i < 180; i += 1) {
+  for (let i = 0; i < 12; i += 1) {
     const puff = new THREE.Group()
-    const blobs = 3 + (i % 4)
-    for (let b = 0; b < blobs; b += 1) {
-      const mesh = new THREE.Mesh(new THREE.SphereGeometry(22 + (b % 3) * 10, 8, 6), cloudMat)
-      mesh.position.set((b - 1) * 18, (b % 2) * 7, (b % 3 - 1) * 8)
-      puff.add(mesh)
-    }
-    const ang = Math.random() * Math.PI * 2
-    const rad = 600 + Math.random() * (WORLD_RADIUS * 0.88)
-    puff.position.set(Math.cos(ang) * rad, 420 + Math.random() * 1400, Math.sin(ang) * rad)
-    puff.userData.speed = 6 + Math.random() * 12
+    const mesh = new THREE.Mesh(new THREE.SphereGeometry(36, 8, 6), cloudMat)
+    mesh.scale.set(1.6, 0.5, 1.2)
+    puff.add(mesh)
+    const ang = (i / 12) * Math.PI * 2
+    puff.position.set(Math.cos(ang) * (900 + i * 140), 1100 + (i % 4) * 160, Math.sin(ang) * (900 + i * 140))
+    puff.userData.speed = 4 + (i % 5)
     scene.add(puff)
     clouds.push(puff)
   }
 
-  // Ring course — around-the-world tour
-  const rings = [
-    { x: 0, y: 32, z: 1150, r: 26, yaw: 0 },
-    { x: -160, y: 90, z: 1650, r: 24, yaw: 0.45 },
-    { x: -40, y: 160, z: 2300, r: 28, yaw: 0.2 },
-    { x: 360, y: 120, z: 1750, r: 26, yaw: -0.8 },
-    { x: 30, y: 55, z: 480, r: 22, yaw: Math.PI },
-    { x: -900, y: 220, z: 3200, r: 30, yaw: 0.3 },
-    { x: -11000, y: 280, z: 4800, r: 32, yaw: -0.5 },
-    { x: 10000, y: 320, z: -8500, r: 34, yaw: 1.0 },
-    { x: 28000, y: 400, z: -3000, r: 36, yaw: 0.8 },
-    { x: 39000, y: 350, z: -1000, r: 34, yaw: 1.2 },
-    { x: 36000, y: 300, z: 20000, r: 36, yaw: -0.9 },
-    { x: 12000, y: 280, z: 12000, r: 34, yaw: 0.4 },
-    { x: -7000, y: 320, z: 21000, r: 34, yaw: -1.1 },
-    { x: 2000, y: 260, z: 38000, r: 38, yaw: Math.PI },
-    { x: -15000, y: 300, z: -4000, r: 32, yaw: -0.6 },
-  ].map((ring) => {
-    const mesh = new THREE.Mesh(
-      new THREE.TorusGeometry(ring.r, Math.max(0.8, ring.r * 0.045), 10, 40),
-      new THREE.MeshBasicMaterial({ color: 0x2de2d1 })
-    )
-    mesh.position.set(ring.x, ring.y, ring.z)
-    mesh.rotation.y = ring.yaw
-    scene.add(mesh)
-    return { ...ring, mesh, got: false }
-  })
+  let enriched = false
+  function enrich() {
+    if (enriched) return
+    enriched = true
+
+    for (const [ox, oz, label] of WORLD_AIRPORTS) {
+      addAirport(scene, obstacles, ox, oz, label)
+    }
+
+    while (treeIndex < 180) {
+      const x = -12000 + (Math.random() - 0.5) * 3000
+      const z = 4000 + (Math.random() - 0.5) * 3000
+      addTree(trunks, treeIndex, x, z, 1.4 + Math.random())
+      const leafDummy = new THREE.Object3D()
+      leafDummy.position.set(x, 4.2, z)
+      leafDummy.scale.set(1.5, 1.2, 1.5)
+      leafDummy.updateMatrix()
+      leaves.setMatrixAt(treeIndex, leafDummy.matrix)
+      treeIndex += 1
+    }
+    trunks.count = treeIndex
+    leaves.count = treeIndex
+    trunks.instanceMatrix.needsUpdate = true
+    leaves.instanceMatrix.needsUpdate = true
+
+    const AIRPORT_MOUNTAIN_CLEAR = 3800
+    const airportKeepouts = [
+      ...WORLD_AIRPORTS.map(([ax, az]) => ({ x: ax, z: az + 700 })),
+      ...SLOT_ORIGINS.map((o) => ({ x: o.x, z: o.z + 1000 })),
+    ]
+    function placeAwayFromAirports(x, z, radius) {
+      let px = x
+      let pz = z
+      for (let pass = 0; pass < 6; pass += 1) {
+        let moved = false
+        for (const a of airportKeepouts) {
+          const need = radius * 1.15 + AIRPORT_MOUNTAIN_CLEAR
+          const dx = px - a.x
+          const dz = pz - a.z
+          const d = Math.hypot(dx, dz)
+          if (d >= need) continue
+          moved = true
+          if (d < 1) { px = a.x + need; pz = a.z }
+          else {
+            const s = need / d
+            px = a.x + dx * s
+            pz = a.z + dz * s
+          }
+        }
+        if (!moved) return { x: px, z: pz, ok: true }
+      }
+      for (const a of airportKeepouts) {
+        if (Math.hypot(px - a.x, pz - a.z) < radius * 1.15 + AIRPORT_MOUNTAIN_CLEAR) {
+          return { x: px, z: pz, ok: false }
+        }
+      }
+      return { x: px, z: pz, ok: true }
+    }
+
+    const peaks = [
+      [180, 5200, 720, 780, 0x6a6e68, true],
+      [520, 5600, 380, 420, 0x61665f, true],
+      [-220, 4900, 320, 360, 0x5e645c, true],
+      [-3200, 4800, 580, 600, 0x61685f, true],
+      [-18000, -2000, 820, 980, 0x636860, true],
+      [-12000, 1000, 580, 680, 0x556054, true],
+      [-11000, 21000, 780, 1180, 0x556058, true],
+      [-7500, 24000, 680, 1040, 0x4a564e, true],
+      [17000, -5500, 520, 780, 0x726a5e, true],
+      [18500, -4000, 460, 640, 0x666258, true],
+      [6500, 12500, 620, 740, 0x8a7355, false],
+      [14000, 14000, 720, 860, 0x927850, false],
+      [26500, 2500, 1100, 1680, 0x8a949c, true],
+      [32000, 2800, 860, 1480, 0x909aa4, true],
+      [24500, 4500, 680, 1180, 0x7a8892, true],
+      [37000, 23500, 560, 600, 0x9a6a38, false],
+      [0, 42000, 1200, 980, 0xd0dae4, true],
+      [4000, 44000, 820, 760, 0xc4d0dc, true],
+      [44500, -800, 480, 920, 0x4a3a32, false],
+    ]
+    for (const [x0, z0, r, h, c, snow] of peaks) {
+      const placed = placeAwayFromAirports(x0, z0, r)
+      if (!placed.ok) continue
+      const arid = !snow && ((c >> 16) & 255) > 120
+      addMountain(scene, obstacles, placed.x, placed.z, r, h, c, snow, {
+        snowLine: snow ? (h > 1000 ? 0.48 : 0.56) : 1.2,
+        grass: arid ? 0x7a6a48 : 0x4a5e3a,
+      })
+    }
+
+    {
+      const fujiR = 520
+      const placed = placeAwayFromAirports(volcanoPos.x, volcanoPos.z, fujiR)
+      if (placed.ok) {
+        volcanoPos = { x: placed.x, z: placed.z }
+        addMountain(scene, obstacles, placed.x, placed.z, fujiR, 1100, 0x3a2a22, true, {
+          crater: 0.12, snowLine: 0.72, grass: 0x3a4030, segments: 48,
+        })
+        const lava = new THREE.Mesh(
+          new THREE.SphereGeometry(55, 10, 8),
+          new THREE.MeshStandardMaterial({ color: 0xff4a12, emissive: 0xff2a00, emissiveIntensity: 0.85, roughness: 0.4 })
+        )
+        lava.position.set(placed.x, 980, placed.z)
+        scene.add(lava)
+        obstacles.push({ name: "volcano", type: "cone", x: placed.x, z: placed.z, r: 360, h: 1100 })
+        if (api.landmarks?.volcano) {
+          api.landmarks.volcano.x = volcanoPos.x
+          api.landmarks.volcano.z = volcanoPos.z
+        }
+      }
+    }
+
+    for (const [x, z] of [[10800, -3000], [11200, -2600], [10400, -2500]]) {
+      const pyr = new THREE.Mesh(new THREE.ConeGeometry(90, 160, 4), new THREE.MeshStandardMaterial({ color: 0xd4b896, roughness: 1 }))
+      pyr.position.set(x, 70, z)
+      pyr.rotation.y = Math.PI / 4
+      scene.add(pyr)
+      obstacles.push({ name: "pyramid", type: "cone", x, z, r: 70, h: 160 })
+    }
+
+    const lightTower = new THREE.Mesh(new THREE.CylinderGeometry(4, 5, 48, 10), new THREE.MeshStandardMaterial({ color: 0xf2f0ea }))
+    lightTower.position.set(560, 24, -40)
+    const lightCap = new THREE.Mesh(new THREE.CylinderGeometry(6, 6, 6, 10), new THREE.MeshBasicMaterial({ color: 0xffe066 }))
+    lightCap.position.set(560, 50, -40)
+    scene.add(lightTower, lightCap)
+    obstacles.push({ name: "lighthouse", type: "cylinder", x: 560, z: -40, r: 8, h: 52 })
+
+    const bridge = new THREE.Mesh(new THREE.BoxGeometry(18, 4, 900), new THREE.MeshStandardMaterial({ color: 0x6a727c, metalness: 0.35, roughness: 0.55 }))
+    bridge.position.set(900, 18, 4200)
+    scene.add(bridge)
+
+    const urban = [0x8a929c, 0x6f7882, 0x9aa3ad, 0x7a6e62, 0x5c6570]
+    for (const args of [
+      [-980, 2500, 16, urban], [400, 2800, 10, urban], [-15000, 1800, 12, urban],
+      [-8500, 21000, 10, urban], [14500, -8200, 12, urban], [31000, -5000, 14, urban],
+      [39500, -1200, 12, urban], [37000, 21000, 10, [0xd8a878, 0xc09060, 0xa87848]],
+      [5000, 8500, 8, urban], [14000, 17500, 8, urban],
+    ]) addCity(scene, obstacles, ...args)
+
+    const boatMat = new THREE.MeshStandardMaterial({ color: 0xf7f7f2 })
+    for (const spot of [[700, 400], [4000, 2000], [8000, -3000], [15000, 2000], [28000, 6000]]) {
+      const boat = new THREE.Mesh(new THREE.BoxGeometry(22, 5, 8), boatMat)
+      boat.position.set(spot[0], 1.8, spot[1])
+      scene.add(boat)
+    }
+
+    for (let i = 0; i < 60; i += 1) {
+      const puff = new THREE.Group()
+      const mesh = new THREE.Mesh(new THREE.SphereGeometry(32 + (i % 4) * 10, 8, 6), cloudMat)
+      mesh.scale.set(1.5, 0.45, 1.1)
+      puff.add(mesh)
+      const ang = Math.random() * Math.PI * 2
+      const rad = 2200 + Math.random() * (WORLD_RADIUS * 0.85)
+      puff.position.set(Math.cos(ang) * rad, 900 + Math.random() * 2200, Math.sin(ang) * rad)
+      puff.userData.speed = 4 + Math.random() * 8
+      scene.add(puff)
+      clouds.push(puff)
+    }
+  }
 
   // Sky dome
   const skyCanvas = document.createElement("canvas")
@@ -768,29 +1032,29 @@ export function createWorld(scene) {
     skyTex.needsUpdate = true
   }
   paintSky([
-    [0, "#0b3d91"],
-    [0.35, "#1f6fd0"],
-    [0.55, "#79c6ff"],
-    [0.78, "#d7f1ff"],
-    [1, "#f3e2c2"],
+    [0, "#0a1a38"],
+    [0.28, "#1a4a7a"],
+    [0.52, "#4a86b0"],
+    [0.78, "#a8c8dc"],
+    [1, "#d8c8a8"],
   ])
   const sky = new THREE.Mesh(
-    new THREE.SphereGeometry(WORLD_RADIUS * 1.35, 32, 20),
+    new THREE.SphereGeometry(WORLD_RADIUS * 1.35, 24, 16),
     new THREE.MeshBasicMaterial({ map: skyTex, side: THREE.BackSide, fog: false, depthWrite: false })
   )
   scene.add(sky)
 
   const sunBall = new THREE.Mesh(
-    new THREE.SphereGeometry(140, 16, 12),
-    new THREE.MeshBasicMaterial({ color: 0xfff1c2, fog: false })
+    new THREE.SphereGeometry(160, 20, 14),
+    new THREE.MeshBasicMaterial({ color: 0xfff3c8, fog: false, transparent: true, opacity: 0.92 })
   )
   sunBall.position.set(8000, 9000, -4000)
   scene.add(sunBall)
 
   // Simple moon opposite the sun
   const moon = new THREE.Mesh(
-    new THREE.SphereGeometry(70, 12, 10),
-    new THREE.MeshBasicMaterial({ color: 0xe8eef5, fog: false })
+    new THREE.SphereGeometry(70, 16, 12),
+    new THREE.MeshBasicMaterial({ color: 0xd8dee8, fog: false })
   )
   moon.position.set(-10000, 7000, 6000)
   scene.add(moon)
@@ -800,17 +1064,13 @@ export function createWorld(scene) {
       cloud.position.x += cloud.userData.speed * dt
       if (cloud.position.x > WORLD_RADIUS * 0.9) cloud.position.x = -WORLD_RADIUS * 0.9
     }
-    for (const ring of rings) {
-      ring.mesh.rotation.z += dt * 0.25
-    }
-    water.position.y = -0.08 + Math.sin(performance.now() * 0.0006) * 0.04
+    // Soft ocean shimmer via normal scroll — no vertical bobbing (that caused flicker).
+    const t = performance.now() * 0.00004
+    oceanMap.offset.set(t * 0.35, t * 0.22)
   }
 
   function resetRings() {
-    for (const ring of rings) {
-      ring.got = false
-      ring.mesh.material.color.set(0x2de2d1)
-    }
+    // Rings course removed — kept as a no-op for older call sites.
   }
 
   function onRunway(x, z) {
@@ -900,7 +1160,7 @@ export function createWorld(scene) {
   const api = {
     obstacles,
     roads,
-    rings,
+    rings: [],
     update,
     resetRings,
     onRunway,
@@ -931,7 +1191,7 @@ export function createWorld(scene) {
       tokyo: { x: 40000, y: 60, z: -1500 },
       sydney: { x: 38000, y: 60, z: 20000 },
       beijing: { x: 32000, y: 60, z: -6000 },
-      volcano: { x: 42200, y: 900, z: -800 },
+      volcano: { x: volcanoPos.x, y: 900, z: volcanoPos.z },
       pyramids: { x: 10800, y: 80, z: -3000 },
       southPole: { x: 0, y: 40, z: 38000 },
       lighthouse: { x: 560, y: 52, z: -40 },
@@ -940,6 +1200,7 @@ export function createWorld(scene) {
     },
     continents: landDisks,
     nearestRegion,
+    enrich,
   }
   return api
 }

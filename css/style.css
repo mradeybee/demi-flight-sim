@@ -119,6 +119,67 @@ button { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
   cursor: pointer;
 }
 
+.mode-actions {
+  display: grid;
+  gap: 12px;
+  margin: 8px 0 12px;
+}
+
+.mode-btn {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 14px;
+  row-gap: 2px;
+  align-items: center;
+  width: 100%;
+  min-height: 72px;
+  padding: 14px 16px;
+  border: 1px solid rgba(11, 61, 145, 0.18);
+  border-radius: 14px;
+  background: #fff;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.mode-btn kbd {
+  grid-row: 1 / span 2;
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  background: #1b2430;
+  color: #f6f1e4;
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.mode-btn strong {
+  font-size: 18px;
+}
+
+.mode-btn small {
+  color: rgba(27, 36, 48, 0.65);
+  font-size: 13px;
+}
+
+.mode-btn-multi {
+  background: linear-gradient(135deg, #fff7e8, #ffe0a3);
+  border-color: rgba(239, 125, 0, 0.35);
+}
+
+.mode-btn:hover,
+.mode-btn:focus-visible {
+  outline: 2px solid #0b3d91;
+  outline-offset: 2px;
+}
+
+.name-card kbd {
+  font-family: inherit;
+}
+
 .airport-banner {
   margin: 10px 0 0;
   font-weight: 700;
@@ -184,6 +245,205 @@ button { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
   color: var(--navy);
   font-weight: 700;
   cursor: pointer;
+}
+
+.hangar-promo {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(11, 61, 145, 0.06);
+  border: 1px solid rgba(11, 61, 145, 0.12);
+}
+
+.hangar-promo .promo-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+}
+
+.hangar-promo .promo-head-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #0b3d91;
+}
+
+.hangar-promo .promo-toggle {
+  border: 0;
+  border-radius: 8px;
+  padding: 4px 10px;
+  min-height: 28px;
+  background: rgba(11, 61, 145, 0.12);
+  color: var(--navy);
+  font: 700 12px/1 inherit;
+  cursor: pointer;
+}
+
+.hangar-promo .promo-toggle:hover {
+  background: rgba(11, 61, 145, 0.2);
+}
+
+.hangar-promo .promo-body {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px 8px;
+  align-items: end;
+}
+
+.hangar-promo .promo-body[hidden] {
+  display: none !important;
+}
+
+.hangar-promo.is-open {
+  padding: 10px;
+}
+
+.hangar-promo .promo-label {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #0b3d91;
+}
+
+.hangar-promo input {
+  min-height: 40px;
+  border-radius: 10px;
+  border: 1px solid rgba(11, 61, 145, 0.2);
+  padding: 0 10px;
+  font: inherit;
+  background: #fff;
+  color: #0f172a;
+}
+
+#promo-btn {
+  min-height: 40px;
+  border: 0;
+  border-radius: 10px;
+  padding: 0 14px;
+  background: rgba(11, 61, 145, 0.88);
+  color: #fff;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.hangar-promo .promo-status {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.35;
+  color: #475569;
+  font-weight: 600;
+}
+
+.hangar-promo .promo-book {
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #e2e8f0;
+}
+
+.hangar-promo .promo-book[hidden] {
+  display: none !important;
+}
+
+.hangar-promo .promo-book-title {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #7dd3fc;
+}
+
+.hangar-promo .promo-book ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 5px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.hangar-promo .promo-book li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 10px;
+  align-items: baseline;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.hangar-promo .promo-book kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: rgba(125, 211, 252, 0.16);
+  border: 1px solid rgba(125, 211, 252, 0.35);
+  color: #bae6fd;
+  font: 700 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.hangar-promo .promo-book .promo-effect {
+  color: #cbd5e1;
+  font-weight: 550;
+}
+
+#ban-lock {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  text-align: center;
+  background: rgba(8, 10, 16, 0.94);
+  color: #f6f1e4;
+}
+
+#ban-lock[hidden] {
+  display: none !important;
+}
+
+#ban-lock h1 {
+  margin: 0;
+  font-size: clamp(2rem, 8vw, 3.4rem);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #ff5a5a;
+}
+
+#ban-lock .ban-left {
+  margin: 8px 0 0;
+  font-size: clamp(2.4rem, 10vw, 4rem);
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+#ban-lock .ban-hint {
+  margin: 0;
+  opacity: 0.65;
+  font-size: 13px;
+}
+
+#ban-lock kbd {
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.12);
 }
 
 #menu {
@@ -476,7 +736,7 @@ button { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
   pointer-events: auto;
 }
 
-.topbar, .readout, #parts-panel, #ap-panel, #wx-panel, #hints, #throttle-panel, #joy, #aux-pad, #adi, #fly-actions {
+.topbar, .readout, #parts-panel, #ap-panel, #wx-panel, #hints, #throttle-panel, #fail-panel, #joy, #aux-pad, #adi, #fly-actions {
   background: var(--hud);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 14px;
@@ -500,7 +760,7 @@ button { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 }
 
 .topbar strong { font-size: 16px; }
-#hud-head, #hud-rings, #hud-cam, #hud-region, #hud-wx { color: var(--amber-2); font-variant-numeric: tabular-nums; }
+#hud-head, #hud-cam, #hud-region, #hud-wx { color: var(--amber-2); font-variant-numeric: tabular-nums; }
 #hud-cam, #hud-region, #hud-wx { opacity: 0.92; font-size: 12px; }
 #hud-cam {
   cursor: pointer;
@@ -641,6 +901,135 @@ button { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 
 .caution.on { display: block; }
 
+#fail-dock {
+  position: absolute;
+  right: max(108px, calc(env(safe-area-inset-right) + 96px));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: row;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;
+  z-index: 3;
+}
+
+#fail-chat {
+  display: none;
+  pointer-events: auto;
+  appearance: none;
+  border: 1px solid rgba(246, 241, 228, 0.18);
+  background: rgba(10, 16, 24, 0.82);
+  color: var(--cream);
+  border-radius: 14px;
+  min-height: 48px;
+  min-width: 64px;
+  padding: 10px 12px;
+  font-weight: 800;
+  font-size: 14px;
+  cursor: pointer;
+  touch-action: manipulation;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25);
+}
+
+#fail-chat.on {
+  background: rgba(42, 157, 143, 0.45);
+  border-color: rgba(42, 157, 143, 0.7);
+}
+
+#fail-chat .chat-fly-badge {
+  margin-left: 6px;
+}
+
+#fail-panel {
+  position: relative;
+  right: auto;
+  bottom: auto;
+  width: min(168px, 42vw);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: auto;
+  background: rgba(10, 16, 24, 0.72);
+  border: 1px solid rgba(246, 241, 228, 0.14);
+  border-radius: 14px;
+  backdrop-filter: blur(8px);
+}
+
+.fail-title {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(246, 241, 228, 0.88);
+  font-weight: 800;
+}
+
+.fail-title kbd {
+  margin-left: 4px;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.12);
+  font-size: 11px;
+}
+
+.fail-status {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.3;
+  color: rgba(246, 241, 228, 0.7);
+}
+
+.fail-modes {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+}
+
+.fail-mode {
+  min-height: 34px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  border: 1px solid rgba(246, 241, 228, 0.18);
+  background: rgba(255, 255, 255, 0.08);
+  color: #f6f1e4;
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.fail-mode.on {
+  background: rgba(230, 57, 70, 0.85);
+  border-color: transparent;
+  color: #fff;
+}
+
+.fail-actions {
+  display: grid;
+  gap: 5px;
+}
+
+.fail-actions button {
+  min-height: 38px;
+  border: 0;
+  border-radius: 10px;
+  background: rgba(255, 183, 3, 0.9);
+  color: #1b1204;
+  font-weight: 800;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+#fail-extinguish {
+  background: rgba(230, 57, 70, 0.92);
+  color: #fff;
+}
+
+#fail-clear {
+  background: rgba(255, 255, 255, 0.14);
+  color: #f6f1e4;
+}
+
 #readout-warn {
   color: #ff6b6b;
 }
@@ -722,6 +1111,11 @@ button { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 }
 
 .ap-modes { grid-template-columns: repeat(3, 1fr); }
+
+#ap-land {
+  width: 100%;
+  letter-spacing: 0.08em;
+}
 
 .ap-btn, .ap-trim button {
   border: 0;
@@ -1039,6 +1433,416 @@ button { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
   color: #1b1204;
 }
 
+#swap-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 7;
+  display: grid;
+  place-items: end center;
+  padding: 12px;
+  padding-bottom: max(12px, env(safe-area-inset-bottom));
+  background: rgba(4, 8, 14, 0.45);
+  backdrop-filter: blur(2px);
+}
+
+#swap-panel .swap-card {
+  width: min(420px, 100%);
+  max-height: min(70vh, 560px);
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 18px;
+  background: var(--hud);
+  border: 1px solid rgba(246, 241, 228, 0.14);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+  color: var(--cream);
+}
+
+.swap-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.swap-head strong {
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 13px;
+}
+
+#swap-close {
+  appearance: none;
+  border: 1px solid rgba(246, 241, 228, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--cream);
+  border-radius: 999px;
+  min-height: 36px;
+  padding: 6px 12px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.swap-blurb {
+  margin: 0;
+  font-size: 13px;
+  color: rgba(246, 241, 228, 0.7);
+  line-height: 1.35;
+}
+
+#swap-list {
+  overflow: auto;
+  display: grid;
+  gap: 6px;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  padding-right: 2px;
+}
+
+.swap-item {
+  appearance: none;
+  border: 1px solid rgba(246, 241, 228, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--cream);
+  border-radius: 12px;
+  min-height: 48px;
+  padding: 10px 12px;
+  text-align: left;
+  display: grid;
+  gap: 2px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.swap-item .swap-name {
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.swap-item .swap-role {
+  font-size: 12px;
+  color: rgba(246, 241, 228, 0.55);
+}
+
+.swap-item.active {
+  border-color: rgba(255, 183, 3, 0.55);
+  background: rgba(239, 125, 0, 0.22);
+}
+
+.swap-item:active {
+  transform: scale(0.99);
+}
+
+#chat-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  background: rgba(4, 8, 14, 0.45);
+  touch-action: none;
+}
+
+#chat {
+  --chat-vv-bottom: 0px;
+  position: fixed;
+  z-index: 6;
+  left: max(12px, env(safe-area-inset-left));
+  bottom: max(12px, calc(env(safe-area-inset-bottom) + var(--chat-vv-bottom)));
+  width: min(360px, calc(100vw - 24px));
+  pointer-events: none;
+}
+
+#chat > * { pointer-events: auto; }
+
+#chat-toggle {
+  position: relative;
+  appearance: none;
+  border: 1px solid rgba(246, 241, 228, 0.18);
+  background: var(--hud);
+  color: var(--cream);
+  border-radius: 999px;
+  min-height: 44px;
+  padding: 10px 16px;
+  font-size: 14px;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+#chat-toggle kbd {
+  margin-left: 4px;
+  opacity: 0.7;
+  font-size: 11px;
+}
+
+#chat-badge,
+#fly-chat .chat-fly-badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--amber);
+  color: #1b1204;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+#chat.open #chat-toggle {
+  display: none;
+}
+
+/* In flight the dock has Chat — hide the floating hangar toggle. */
+#chat.in-flight:not(.open) #chat-toggle {
+  display: none;
+}
+
+#chat-panel {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 16px;
+  background: var(--hud);
+  border: 1px solid rgba(246, 241, 228, 0.14);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(10px);
+}
+
+.chat-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.chat-head strong {
+  color: var(--cream);
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+#chat-close {
+  appearance: none;
+  border: 1px solid rgba(246, 241, 228, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--cream);
+  border-radius: 999px;
+  min-height: 36px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+#chat-log {
+  max-height: min(28vh, 220px);
+  overflow: auto;
+  display: grid;
+  gap: 6px;
+  padding-right: 2px;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+}
+
+.chat-line {
+  font-size: 14px;
+  line-height: 1.35;
+  color: var(--cream);
+  word-break: break-word;
+}
+
+.chat-line .who {
+  color: var(--amber-2);
+  font-weight: 600;
+  margin-right: 6px;
+}
+
+.chat-line.you .who {
+  color: var(--good);
+}
+
+.chat-line.system {
+  color: rgba(246, 241, 228, 0.72);
+  font-style: italic;
+}
+
+#chat-form {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.chat-compose {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px;
+  min-width: 0;
+  align-items: center;
+}
+
+#chat-emoji {
+  appearance: none;
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border: 1px solid rgba(246, 241, 228, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--cream);
+  border-radius: 12px;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+#chat-emoji[aria-expanded="true"] {
+  border-color: rgba(255, 183, 3, 0.55);
+  background: rgba(255, 183, 3, 0.12);
+}
+
+#chat-emoji-panel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 2;
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 4px;
+  padding: 8px;
+  border-radius: 12px;
+  background: rgba(10, 16, 24, 0.96);
+  border: 1px solid rgba(246, 241, 228, 0.16);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+  max-height: 148px;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+#chat-emoji-panel[hidden] {
+  display: none !important;
+}
+
+#chat-emoji-panel button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  border-radius: 8px;
+  min-height: 36px;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: manipulation;
+  padding: 0;
+}
+
+#chat-emoji-panel button:hover,
+#chat-emoji-panel button:focus-visible {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+#chat-input {
+  min-width: 0;
+  min-height: 44px;
+  border: 1px solid rgba(246, 241, 228, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--cream);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 16px; /* keeps iOS from zooming the page */
+  outline: none;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+#chat-input::placeholder {
+  color: rgba(246, 241, 228, 0.45);
+}
+
+#chat-input:focus {
+  border-color: rgba(255, 183, 3, 0.55);
+}
+
+#chat-send {
+  border: 0;
+  border-radius: 12px;
+  background: var(--amber);
+  color: #1b1204;
+  font-weight: 700;
+  min-width: 72px;
+  min-height: 44px;
+  padding: 0 16px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.chat-hint {
+  margin: 0;
+  font-size: 12px;
+  color: rgba(246, 241, 228, 0.55);
+}
+
+/* Phones / iPads: keep chat clear of stick & throttle; sheet when open. */
+@media (max-width: 900px), (pointer: coarse) {
+  #chat-toggle kbd {
+    display: none;
+  }
+
+  #chat:not(.in-flight) {
+    /* Hangar: top-right of the 3D view, clear of the menu list. */
+    left: auto;
+    right: max(12px, env(safe-area-inset-right));
+    top: max(12px, env(safe-area-inset-top));
+    bottom: auto;
+    width: auto;
+  }
+
+  #chat.in-flight {
+    left: max(8px, env(safe-area-inset-left));
+    right: max(8px, env(safe-area-inset-right));
+    width: auto;
+    bottom: max(8px, calc(env(safe-area-inset-bottom) + var(--chat-vv-bottom)));
+  }
+
+  #chat.open {
+    left: max(8px, env(safe-area-inset-left));
+    right: max(8px, env(safe-area-inset-right));
+    top: auto;
+    bottom: max(8px, calc(env(safe-area-inset-bottom) + var(--chat-vv-bottom)));
+    width: auto;
+  }
+
+  #chat.open #chat-panel {
+    width: 100%;
+    max-height: min(52vh, 420px);
+    border-radius: 18px 18px 14px 14px;
+  }
+
+  #chat-log {
+    max-height: min(28vh, 200px);
+  }
+
+  #chat-toggle {
+    min-height: 48px;
+    padding: 12px 18px;
+    font-size: 15px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  }
+
+  #fly-chat {
+    position: relative;
+  }
+}
+
 #toast {
   position: fixed;
   z-index: 5;
@@ -1059,6 +1863,149 @@ button { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 #toast.show {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
+}
+
+/* Always-on chat bubbles — every pilot sees a popup when someone sends. */
+#chat-pop {
+  position: fixed;
+  z-index: 90;
+  top: max(76px, calc(env(safe-area-inset-top) + 58px));
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(460px, calc(100vw - 20px));
+  display: grid;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.chat-pop-bubble {
+  display: grid;
+  gap: 4px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(8, 14, 22, 0.94);
+  border: 2px solid rgba(255, 183, 3, 0.55);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.45);
+  color: var(--cream);
+  backdrop-filter: blur(10px);
+  opacity: 0;
+  transform: translateY(-14px) scale(0.96);
+  transition: opacity 0.22s ease, transform 0.22s ease;
+}
+
+.chat-pop-bubble.show {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.chat-pop-bubble.out {
+  opacity: 0;
+  transform: translateY(-8px) scale(0.98);
+}
+
+.chat-pop-bubble .who {
+  color: var(--amber-2);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.chat-pop-bubble.you {
+  border-color: rgba(42, 157, 143, 0.7);
+}
+
+.chat-pop-bubble.you .who {
+  color: var(--good);
+}
+
+.chat-pop-bubble .msg {
+  font-size: 18px;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+@media (max-width: 900px), (pointer: coarse) {
+  #chat-pop {
+    top: max(70px, calc(env(safe-area-inset-top) + 52px));
+    width: min(400px, calc(100vw - 16px));
+  }
+  .chat-pop-bubble {
+    padding: 16px 18px;
+  }
+  .chat-pop-bubble .msg {
+    font-size: 19px;
+  }
+}
+
+#crash-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 8;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at 50% 30%, rgba(239, 125, 0, 0.22), transparent 42%),
+    rgba(8, 14, 22, 0.72);
+  backdrop-filter: blur(4px);
+}
+
+.crash-card {
+  width: min(420px, 100%);
+  padding: 28px 24px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(239, 231, 214, 0.98), rgba(247, 241, 228, 0.96));
+  color: var(--ink);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.4);
+  text-align: center;
+}
+
+.crash-card .eyebrow {
+  margin: 0 0 6px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-size: 12px;
+  color: #a33a12;
+  font-weight: 700;
+}
+
+.crash-card h1 {
+  margin: 0 0 10px;
+  font-size: clamp(28px, 5vw, 36px);
+  line-height: 1.1;
+}
+
+.crash-card p {
+  margin: 0 0 22px;
+  color: rgba(27, 36, 48, 0.78);
+  line-height: 1.4;
+}
+
+.crash-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.crash-actions button {
+  min-height: 48px;
+  border: 0;
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-weight: 700;
+  cursor: pointer;
+  background: rgba(16, 32, 51, 0.1);
+  color: var(--navy);
+}
+
+.crash-actions button.crash-primary {
+  background: linear-gradient(180deg, var(--amber-2), var(--amber));
+  color: #1b1204;
+}
+
+.crash-actions button:active {
+  transform: scale(0.98);
 }
 
 @media (max-width: 900px) {
@@ -1110,6 +2057,40 @@ button { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
   }
   #throttle-panel {
     bottom: max(64px, calc(env(safe-area-inset-bottom) + 52px));
+  }
+  #fail-dock {
+    right: max(96px, calc(env(safe-area-inset-right) + 84px));
+    bottom: max(64px, calc(env(safe-area-inset-bottom) + 52px));
+  }
+  #fail-panel {
+    width: min(148px, 40vw);
+    padding: 8px;
+  }
+  .fail-mode { min-height: 30px; font-size: 11px; }
+  .fail-actions button { min-height: 34px; font-size: 12px; }
+}
+
+/* Phones / iPads: Chat sits beside Failures (left of the panel). */
+@media (max-width: 900px), (pointer: coarse) {
+  #fail-chat {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #fail-chat[hidden] {
+    display: none !important;
+  }
+  /* Dock bar Chat is redundant once the Failures-side control is up. */
+  #fly-chat {
+    display: none !important;
+  }
+  #fail-dock {
+    gap: 6px;
+  }
+  #fail-chat {
+    min-height: 52px;
+    padding: 12px 14px;
+    font-size: 15px;
   }
 }
 

@@ -21,7 +21,7 @@ fi
 
 # Show LAN URLs in Terminal so friends can join.
 echo "Turbo Flight Sim multiplayer"
-echo "  Local: http://127.0.0.1:$PORT"
+echo "  Loc7.0.0.1:$PORT"
 if command -v ipconfig >/dev/null 2>&1; then
   for ip in $(ipconfig getifaddr en0 2>/dev/null; ipconfig getifaddr en1 2>/dev/null); do
     echo "  LAN:   http://$ip:$PORT"
@@ -30,4 +30,4 @@ fi
 echo "Open the LAN link on phones/laptops on the same Wi-Fi."
 echo ""
 
-open "http://127.0.0.1:$PORT/?v=82"
+open "http://127.0.0.1:$PORT/?v=165"

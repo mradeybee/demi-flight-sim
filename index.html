@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <title>Turbo Flight Sim 0.1</title>
-  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/style.css?v=165" />
 </head>
 <body>
   <canvas id="view"></canvas>
@@ -12,14 +12,33 @@
 
   <div id="name-gate" hidden>
     <form id="name-form" class="name-card">
-      <p class="eyebrow">Multiplayer hangar</p>
-      <h1>What’s your name?</h1>
-      <p>We’ll name your airport after you. Friends on the same Wi‑Fi can join this game.</p>
-      <label class="name-label">Pilot name
-        <input id="player-name" type="text" maxlength="16" minlength="2" autocomplete="nickname" placeholder="Demi" required />
-      </label>
-      <button id="name-go" type="submit">Enter hangar</button>
-      <p id="join-hint" class="menu-hint"></p>
+      <div id="name-step">
+        <p class="eyebrow">Turbo Flight Sim</p>
+        <h1>What’s your name?</h1>
+        <p>We’ll name your airport after you.</p>
+        <label class="name-label">Pilot name
+          <input id="player-name" type="text" maxlength="16" minlength="2" autocomplete="nickname" placeholder="Demi" required />
+        </label>
+        <button id="name-go" type="submit">Continue</button>
+      </div>
+      <div id="mode-step" hidden>
+        <p class="eyebrow">How do you want to play?</p>
+        <h1>Pick a mode</h1>
+        <p>Press <kbd>S</kbd> for singleplayer or <kbd>M</kbd> for multiplayer.</p>
+        <div class="mode-actions">
+          <button id="mode-single" type="button" class="mode-btn">
+            <kbd>S</kbd>
+            <strong>Singleplayer</strong>
+            <small>Fly alone on this device</small>
+          </button>
+          <button id="mode-multi" type="button" class="mode-btn mode-btn-multi">
+            <kbd>M</kbd>
+            <strong>Multiplayer</strong>
+            <small>Friends on the same Wi‑Fi</small>
+          </button>
+        </div>
+        <p id="join-hint" class="menu-hint"></p>
+      </div>
     </form>
   </div>
 
@@ -27,7 +46,7 @@
     <header class="mast">
       <p class="eyebrow" id="hangar-eyebrow">Hangar 0.1</p>
       <h1>Turbo Flight Sim 0.1</h1>
-      <p>Seven airliners plus cars and roads. Your own airport. Fly or drive with friends on Wi‑Fi.</p>
+      <p>A full hangar of airliners, regionals, and GA. Your own airport. Fly with friends on Wi‑Fi.</p>
       <p id="airport-banner" class="airport-banner"></p>
       <div id="players-online" class="players-online" aria-live="polite"></div>
       <p id="traffic-hangar" class="traffic-hangar" aria-live="polite"></p>
@@ -38,11 +57,30 @@
       <h2 id="plane-name"></h2>
       <p class="blurb" id="plane-blurb"></p>
       <p class="parts" id="plane-parts"></p>
+      <div class="hangar-promo" id="hangar-promo">
+        <div class="promo-head">
+          <p class="promo-head-title">Promo codes</p>
+          <button id="promo-toggle" type="button" class="promo-toggle" aria-expanded="false" aria-controls="promo-body">
+            Show
+          </button>
+        </div>
+        <div id="promo-body" class="promo-body" hidden>
+          <label class="promo-label">Promo code
+            <input id="promo-input" type="text" maxlength="16" autocomplete="off" spellcheck="false" placeholder="Enter code" />
+          </label>
+          <button id="promo-btn" type="button">Redeem</button>
+          <p id="promo-status" class="promo-status">Enter a code for extras.</p>
+          <div id="promo-book" class="promo-book" hidden>
+            <p class="promo-book-title">Your codes (admin only)</p>
+            <ul id="promo-book-list"></ul>
+          </div>
+        </div>
+      </div>
       <div class="dock-actions">
         <button id="settings-open" type="button" class="settings-link">Settings</button>
         <button id="fly-btn" type="button">Fly</button>
       </div>
-      <p class="menu-hint">Pick a plane or car, then Fly / Drive. Drag to look. Pinch to zoom.</p>
+      <p class="menu-hint">Pick a plane, then Fly. Drag to look. Pinch to zoom.</p>
     </footer>
   </aside>
 
@@ -80,6 +118,14 @@
     </div>
   </aside>
 
+  <div id="ban-lock" hidden>
+    <p class="eyebrow">Turbo Flight Sim</p>
+    <h1>Banned</h1>
+    <p>You redeemed <kbd>ban</kbd>. Come back in:</p>
+    <p id="ban-left" class="ban-left">10:00</p>
+    <p class="ban-hint">Admin code clears this early.</p>
+  </div>
+
   <div id="wx-panel" aria-label="Flight weather" hidden>
     <div class="wx-title">Weather</div>
     <div id="wx-status">Clear</div>
@@ -92,7 +138,6 @@
       <span id="hud-region">North America</span>
       <span id="hud-cam">Cam 1/16</span>
       <span id="hud-head">000</span>
-      <span id="hud-rings">Rings 0/5</span>
       <span id="hud-wx">WX Clear</span>
       <span id="hud-traffic"></span>
     </div>
@@ -122,6 +167,15 @@
       <div class="caution amber" data-warn="gear">GEAR</div>
       <div class="caution amber" data-warn="door">DOOR</div>
       <div class="caution amber" data-warn="flaps">FLAPS</div>
+      <div class="caution" data-warn="eng1">ENG 1 FAIL</div>
+      <div class="caution" data-warn="eng2">ENG 2 FAIL</div>
+      <div class="caution" data-warn="fire">ENGINE FIRE</div>
+      <div class="caution amber" data-warn="hyd">HYD FAIL</div>
+      <div class="caution amber" data-warn="elec">ELEC FAIL</div>
+      <div class="caution amber" data-warn="gearjam">GEAR JAM</div>
+      <div class="caution" data-warn="careng">ENGINE</div>
+      <div class="caution" data-warn="tire">FLAT TIRE</div>
+      <div class="caution" data-warn="brakes">BRAKE FAIL</div>
     </div>
     <div id="parts-panel"></div>
     <div id="ap-panel" aria-label="Autopilot">
@@ -132,6 +186,7 @@
         <button type="button" id="ap-alt" class="ap-btn" data-mode="alt">ALT</button>
         <button type="button" id="ap-spd" class="ap-btn" data-mode="spd">SPD</button>
       </div>
+      <button type="button" id="ap-land" class="ap-btn" title="Autoland at your airport (H)">HOME</button>
       <div class="ap-targets">
         <span id="ap-hdg-read">HDG —</span>
         <span id="ap-alt-read">ALT —</span>
@@ -149,6 +204,8 @@
       <button type="button" data-fly="cam" id="fly-cam" title="Cycle camera">Cam</button>
       <button type="button" data-fly="cockpit" title="Cockpit view">Cockpit</button>
       <button type="button" data-fly="orbit" title="Orbit view">Orbit</button>
+      <button type="button" data-fly="chat" id="fly-chat" title="Open chat">Chat</button>
+      <button type="button" data-fly="planes" id="fly-planes" title="Change aircraft">Planes</button>
       <button type="button" data-fly="jump" id="fly-jump" title="Double-tap to jump out or board">Jump</button>
       <button type="button" data-fly="reset" title="Reset to runway">Reset</button>
       <button type="button" data-fly="mute" id="mute-btn" title="Toggle sound">Sound on</button>
@@ -165,6 +222,25 @@
       </div>
     </div>
     <div id="hints"></div>
+    <div id="fail-dock" aria-label="Failures and chat">
+      <button type="button" id="fail-chat" title="Open chat" hidden>
+        Chat<span class="chat-fly-badge" hidden>0</span>
+      </button>
+      <div id="fail-panel" aria-label="Failures">
+        <div class="fail-title">Failures <kbd>K</kbd></div>
+        <p id="fail-status" class="fail-status">Random on</p>
+        <div class="fail-modes" id="fail-modes">
+          <button type="button" class="fail-mode" data-fail="off">Off</button>
+          <button type="button" class="fail-mode on" data-fail="on">On</button>
+          <button type="button" class="fail-mode" data-fail="hard">Hard</button>
+        </div>
+        <div class="fail-actions">
+          <button type="button" id="fail-trigger" title="Trigger a practice failure">Fail now</button>
+          <button type="button" id="fail-extinguish" title="Extinguish engine fire" hidden>Put out fire</button>
+          <button type="button" id="fail-clear" title="Clear all failures">Clear</button>
+        </div>
+      </div>
+    </div>
     <div id="throttle-panel">
       <div id="throttle-slider" aria-label="Throttle">
         <div id="throttle-fill"></div>
@@ -175,6 +251,104 @@
   </div>
 
   <div id="toast" role="status"></div>
+  <div id="chat-pop" aria-live="polite"></div>
+
+  <div id="swap-panel" hidden>
+    <div class="swap-card">
+      <div class="swap-head">
+        <strong>Change aircraft</strong>
+        <button type="button" id="swap-close">Close</button>
+      </div>
+      <p class="swap-blurb">Pick a new plane without landing — you keep your place in the sky.</p>
+      <div id="swap-list"></div>
+    </div>
+  </div>
+
+  <div id="chat-backdrop" hidden></div>
+  <div id="chat" hidden>
+    <button type="button" id="chat-toggle" title="Open chat">
+      Chat <kbd>T</kbd><span id="chat-badge" hidden>0</span>
+    </button>
+    <div id="chat-panel" hidden>
+      <div class="chat-head">
+        <strong>Chat</strong>
+        <button type="button" id="chat-close" aria-label="Close chat">Close</button>
+      </div>
+      <div id="chat-log" aria-live="polite"></div>
+      <form id="chat-form" autocomplete="off">
+        <div class="chat-compose">
+          <button type="button" id="chat-emoji" title="Emojis" aria-label="Insert emoji" aria-expanded="false">☺</button>
+          <div id="chat-emoji-panel" hidden role="listbox" aria-label="Emoji picker">
+            <button type="button" data-emoji="😀">😀</button>
+            <button type="button" data-emoji="😂">😂</button>
+            <button type="button" data-emoji="🤣">🤣</button>
+            <button type="button" data-emoji="😍">😍</button>
+            <button type="button" data-emoji="😎">😎</button>
+            <button type="button" data-emoji="🤩">🤩</button>
+            <button type="button" data-emoji="😱">😱</button>
+            <button type="button" data-emoji="😭">😭</button>
+            <button type="button" data-emoji="😤">😤</button>
+            <button type="button" data-emoji="🫡">🫡</button>
+            <button type="button" data-emoji="👍">👍</button>
+            <button type="button" data-emoji="👎">👎</button>
+            <button type="button" data-emoji="👏">👏</button>
+            <button type="button" data-emoji="🙌">🙌</button>
+            <button type="button" data-emoji="✌️">✌️</button>
+            <button type="button" data-emoji="👋">👋</button>
+            <button type="button" data-emoji="✈️">✈️</button>
+            <button type="button" data-emoji="🛫">🛫</button>
+            <button type="button" data-emoji="🛬">🛬</button>
+            <button type="button" data-emoji="🛩️">🛩️</button>
+            <button type="button" data-emoji="🚁">🚁</button>
+            <button type="button" data-emoji="🚀">🚀</button>
+            <button type="button" data-emoji="🛰️">🛰️</button>
+            <button type="button" data-emoji="☁️">☁️</button>
+            <button type="button" data-emoji="⛈️">⛈️</button>
+            <button type="button" data-emoji="🌈">🌈</button>
+            <button type="button" data-emoji="⭐">⭐</button>
+            <button type="button" data-emoji="🔥">🔥</button>
+            <button type="button" data-emoji="💥">💥</button>
+            <button type="button" data-emoji="💨">💨</button>
+            <button type="button" data-emoji="🎯">🎯</button>
+            <button type="button" data-emoji="🏆">🏆</button>
+            <button type="button" data-emoji="💯">💯</button>
+            <button type="button" data-emoji="❤️">❤️</button>
+            <button type="button" data-emoji="💙">💙</button>
+            <button type="button" data-emoji="✨">✨</button>
+            <button type="button" data-emoji="🎉">🎉</button>
+            <button type="button" data-emoji="👀">👀</button>
+            <button type="button" data-emoji="🫠">🫠</button>
+            <button type="button" data-emoji="😴">😴</button>
+          </div>
+          <input
+            id="chat-input"
+            type="text"
+            maxlength="140"
+            placeholder="Message… type or tap ☺"
+            spellcheck="true"
+            enterkeyhint="send"
+            inputmode="text"
+            autocomplete="off"
+            autocapitalize="sentences"
+          />
+        </div>
+        <button type="submit" id="chat-send">Send</button>
+      </form>
+      <p id="chat-hint" class="chat-hint">Tap Chat to talk with friends on Wi‑Fi</p>
+    </div>
+  </div>
+
+  <div id="crash-screen" hidden>
+    <div class="crash-card">
+      <p class="eyebrow">Crash</p>
+      <h1>You crashed</h1>
+      <p id="crash-message">That didn’t go as planned.</p>
+      <div class="crash-actions">
+        <button type="button" id="crash-hangar">Hangar</button>
+        <button type="button" id="crash-respawn" class="crash-primary">Respawn</button>
+      </div>
+    </div>
+  </div>
 
   <script type="importmap">
   {
@@ -183,6 +357,6 @@
     }
   }
   </script>
-  <script type="module" src="js/main.js?v=100"></script>
+  <script type="module" src="js/main.js?v=165"></script>
 </body>
 </html>

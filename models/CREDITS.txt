@@ -1,9 +1,8 @@
 Aircraft 3D models used in Turbo Flight Sim 0.1
 
-These models are used under Creative Commons Attribution 4.0 (CC BY 4.0).
+From amvlab / aircraft-models (https://github.com/amvlab/aircraft-models)
+licensed under Creative Commons Attribution 4.0 (CC BY 4.0)
 https://creativecommons.org/licenses/by/4.0/
-
-From amvlab / aircraft-models (https://github.com/amvlab/aircraft-models):
 - A320_nologo.glb → a320.glb
 - A350_nologo.glb → a350.glb
 - A380_nologo.glb → a380.glb
@@ -12,10 +11,26 @@ From amvlab / aircraft-models (https://github.com/amvlab/aircraft-models):
 - EVTOL_nologo.glb → evtol.glb
 - drone_nologo.glb → drone.glb
 
-Boeing 747 is an original high-detail procedural mesh in Turbo Flight Sim 0.1
-(upper-deck hump, four high-bypass turbofans, wing fairings, dual window belts).
-It is intentionally not the A380 GLB.
+From Flightradar24 / fr24-3d-models (https://github.com/Flightradar24/fr24-3d-models)
+originally from FlightGear / FGMEMBERS, licensed under GPLv2
+https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+Collada sources converted to glTF 2.0:
+- a318, a319, a321, a220 (CS300), a330, a340, beluga
+- b747 (744), b757, b767, b777
+- atr42, q400, crj700, crj900, e170, e190, bae146
+- citation, pa28, ask21, heli (EC135)
 
 Models were scaled and reoriented for this game. Interactive opening parts
 (doors, gear, flaps, and so on) and Demi Airline paint are original
 Turbo Flight Sim 0.1 work.
+
+Landing gear kits under models/gear/ (AC3D → glTF via assimp)
+from FlightGear / FGMEMBERS, licensed under GPLv2:
+- A320-family LandingGears → a320 (+ reused for A318/A319/A321/A220)
+- 737-800 nosegear + A320 MLG → b737
+- 747-400_gear → b747 (+ reused for A380)
+- 777-200ER gear objects → b777 (+ reused for B767)
+- 787-8 / 757-200 / A330-200 / A340 / A300-600ST / CRJ700-family /
+  ATR-42-500 / Dash8Q200 / Embraer-195 / Citation-II / ec135 /
+  c172p / ASK21 gear extractions → matching kits
+Regenerate with: node scripts/import-fg-gear.mjs

@@ -1,5 +1,6 @@
 import * as THREE from "three"
 import { hasRealModel, prepareRealModel } from "./models.js"
+import { buildGearKitGroup } from "./gearKits.js"
 import { applyDemiAirline } from "./airline.js"
 import { applyTypeLook } from "./looks.js"
 import { COCKPIT_BUTTONS } from "./cockpitButtons.js"
@@ -12,6 +13,8 @@ const PROFILES = {
   // Airliner: rounded nose, long parallel tube, tapered tail.
   tube: [[0.22, 0], [0.7, 0.04], [0.95, 0.1], [1, 0.2], [1, 0.78], [0.78, 0.9], [0.35, 0.97], [0.1, 1]],
   jumbo: [[0.28, 0], [0.75, 0.04], [0.96, 0.1], [1, 0.22], [1, 0.8], [0.82, 0.91], [0.4, 0.97], [0.12, 1]],
+  // MD-11: sharper Douglas nose, long constant section, clean taper into the #3/T-tail.
+  md11: [[0.14, 0], [0.48, 0.035], [0.82, 0.07], [0.96, 0.12], [1, 0.2], [1, 0.78], [0.88, 0.88], [0.55, 0.94], [0.22, 0.98], [0.06, 1]],
   biz: [[0.18, 0], [0.6, 0.05], [0.92, 0.16], [1, 0.38], [0.95, 0.72], [0.55, 0.9], [0.14, 1]],
   warbird: [[0.1, 0], [0.4, 0.05], [0.75, 0.16], [1, 0.38], [1, 0.62], [0.72, 0.82], [0.3, 0.94], [0.06, 1]],
   fighter: [[0.08, 0], [0.35, 0.06], [0.7, 0.22], [0.95, 0.45], [1, 0.65], [0.55, 0.84], [0.18, 0.95], [0.02, 1]],
@@ -111,9 +114,11 @@ function decalTexture(kind) {
 }
 
 function liveryTexture(def) {
+  const fedex = def.brand === "fedex" || def.lockedLivery === "fedex"
   return canvasTexture((ctx, w, h) => {
-    const body = def.body || "#f4f8fb"
-    const accent = def.accent || "#1d4e89"
+    const body = fedex ? "#f4f1fa" : (def.body || "#f4f8fb")
+    const accent = fedex ? "#4D148C" : (def.accent || "#1d4e89")
+    const orange = fedex ? "#FF6600" : (def.accent2 || accent)
     ctx.fillStyle = body
     ctx.fillRect(0, 0, w, h)
     const shade = ctx.createLinearGradient(0, 0, 0, h)
@@ -122,6 +127,44 @@ function liveryTexture(def) {
     shade.addColorStop(1, "rgba(0,0,0,0.12)")
     ctx.fillStyle = shade
     ctx.fillRect(0, 0, w, h)
+    if (fedex) {
+      // Classic Express freighter: white upper, grey belly, purple/orange titles.
+      ctx.fillStyle = "#f7f7f5"
+      ctx.fillRect(0, 0, w, h)
+      ctx.fillStyle = "#6a6e74"
+      ctx.fillRect(0, h * 0.58, w, h * 0.42)
+      const shade = ctx.createLinearGradient(0, 0, 0, h)
+      shade.addColorStop(0, "rgba(255,255,255,0.2)")
+      shade.addColorStop(0.5, "rgba(255,255,255,0)")
+      shade.addColorStop(1, "rgba(0,0,0,0.1)")
+      ctx.fillStyle = shade
+      ctx.fillRect(0, 0, w, h)
+      // Thin purple cheatline
+      ctx.fillStyle = accent
+      ctx.fillRect(0, h * 0.545, w, h * 0.018)
+      ctx.fillStyle = orange
+      ctx.fillRect(0, h * 0.562, w, h * 0.01)
+      ctx.textAlign = "left"
+      ctx.textBaseline = "middle"
+      const logoSize = Math.floor(h * 0.12)
+      ctx.font = `900 ${logoSize}px Arial Black, Impact, sans-serif`
+      const fedW = ctx.measureText("Fed").width
+      ctx.fillStyle = accent
+      ctx.fillText("Fed", w * 0.22, h * 0.4)
+      ctx.fillStyle = orange
+      ctx.fillText("Ex", w * 0.22 + fedW, h * 0.4)
+      ctx.fillStyle = accent
+      ctx.font = `700 ${Math.floor(h * 0.04)}px Arial, sans-serif`
+      ctx.fillText("Express", w * 0.22, h * 0.5)
+      ctx.font = `bold ${Math.floor(h * 0.045)}px sans-serif`
+      ctx.fillText(def.number || "N601FE", w * 0.7, h * 0.78)
+      for (let i = 0; i < 4; i += 1) {
+        const x = w * 0.1 + i * w * 0.035
+        ctx.fillStyle = "rgba(20, 36, 58, 0.88)"
+        ctx.fillRect(x, h * 0.3, w * 0.022, h * 0.04)
+      }
+      return
+    }
     ctx.fillStyle = accent
     ctx.globalAlpha = 0.92
     ctx.fillRect(0, h * 0.42, w, h * 0.08)
@@ -171,6 +214,7 @@ function makeMaterials(def) {
     wing.color.set("#ffffff")
     wing.clearcoat = 0.45
   }
+  const accent2Hex = def.accent2 || def.accent
   return {
     paint,
     wing,
@@ -181,6 +225,18 @@ function makeMaterials(def) {
       clearcoat: 0.55,
       clearcoatRoughness: 0.22,
       envMapIntensity: 1.2,
+      side: THREE.DoubleSide,
+    }),
+    accent2: new THREE.MeshPhysicalMaterial({
+      name: "fedex-orange",
+      color: accent2Hex,
+      metalness: 0.5,
+      roughness: 0.28,
+      clearcoat: 0.65,
+      clearcoatRoughness: 0.18,
+      envMapIntensity: 1.35,
+      emissive: new THREE.Color(accent2Hex),
+      emissiveIntensity: 0,
       side: THREE.DoubleSide,
     }),
     dark: new THREE.MeshStandardMaterial({ color: 0x1a1d22, metalness: 0.55, roughness: 0.45, envMapIntensity: 1 }),
@@ -204,14 +260,486 @@ function makeMaterials(def) {
 }
 
 function fuselageGeometry(def, length) {
-  const shape = PROFILES[def.profile] || PROFILES.light
-  const segs = def.id === "b747" ? 72 : 48
+  const shape = (def.id === "md11" ? PROFILES.md11 : null) || PROFILES[def.profile] || PROFILES.light
+  const segs = def.id === "b747" || def.id === "md11" ? 72 : 48
   const points = shape.map(([radius, t]) => new THREE.Vector2(Math.max(0.02, radius * def.radius), t * length))
   const geometry = new THREE.LatheGeometry(points, segs)
   geometry.translate(0, -length / 2, 0)
   geometry.rotateX(Math.PI / 2)
   geometry.computeVertexNormals()
   return geometry
+}
+
+/**
+ * Engine-fire FX streaming aft from the nozzle (−Z), same facing as jet thrust cones.
+ * Cone tip → aft; base sits at the exhaust. Layered hot core + cooler envelope + smoke.
+ */
+function makeEngineFire(r) {
+  const group = new THREE.Group()
+  group.visible = false
+  group.userData.engineFire = true
+  const layers = []
+
+  // Point cone tip aft (−Z): rotX(π/2) maps local +Y → −Z (matches thrust flame).
+  const aimAft = Math.PI / 2
+
+  const jets = [
+    // Cool outer envelope
+    { color: 0xff1a00, op: 0.55, rad: 0.95, len: 3.6, y: 0.08, lift: 0.12 },
+    // Mid orange
+    { color: 0xff6a00, op: 0.78, rad: 0.62, len: 3.1, y: 0.12, lift: 0.18 },
+    // Hot yellow
+    { color: 0xffc233, op: 0.9, rad: 0.36, len: 2.45, y: 0.16, lift: 0.22 },
+    // White-hot core
+    { color: 0xfff6c8, op: 0.95, rad: 0.16, len: 1.7, y: 0.18, lift: 0.25 },
+  ]
+  for (const spec of jets) {
+    const mat = new THREE.MeshBasicMaterial({
+      color: spec.color,
+      transparent: true,
+      opacity: spec.op,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+    })
+    mat.userData.baseOp = spec.op
+    const len = r * spec.len
+    const mesh = new THREE.Mesh(new THREE.ConeGeometry(r * spec.rad, len, 10, 1, true), mat)
+    mesh.rotation.x = aimAft
+    // Base at nozzle (z≈0), tip trails aft. Slight lift so flame rides above the nacelle line.
+    mesh.position.set(0, r * spec.y, -len * 0.5)
+    group.add(mesh)
+    layers.push({
+      mesh,
+      mat,
+      baseX: 0,
+      baseY: mesh.position.y,
+      baseZ: mesh.position.z,
+      lift: spec.lift,
+      kind: "jet",
+    })
+  }
+
+  // Side tongues — still mostly aft, with a little yaw so the blaze reads wider.
+  for (const side of [-1, 1]) {
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xff3d00,
+      transparent: true,
+      opacity: 0.5,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+    })
+    mat.userData.baseOp = 0.5
+    const len = r * 2.2
+    const lick = new THREE.Mesh(new THREE.ConeGeometry(r * 0.32, len, 7, 1, true), mat)
+    lick.rotation.x = aimAft
+    lick.rotation.z = side * 0.28
+    lick.rotation.y = side * 0.22
+    lick.position.set(side * r * 0.28, r * 0.22, -len * 0.45)
+    group.add(lick)
+    layers.push({
+      mesh: lick,
+      mat,
+      baseX: lick.position.x,
+      baseY: lick.position.y,
+      baseZ: lick.position.z,
+      lift: 0.15,
+      kind: "lick",
+    })
+  }
+
+  // Upward lick near the nozzle (buoyancy), still rooted at the exhaust.
+  {
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xff5500,
+      transparent: true,
+      opacity: 0.48,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+    })
+    mat.userData.baseOp = 0.48
+    const len = r * 1.8
+    const up = new THREE.Mesh(new THREE.ConeGeometry(r * 0.38, len, 7, 1, true), mat)
+    // Tip mostly up, slight aft lean.
+    up.rotation.x = aimAft * 0.35
+    up.position.set(0, r * 0.35 + len * 0.25, -r * 0.35)
+    group.add(up)
+    layers.push({
+      mesh: up,
+      mat,
+      baseX: 0,
+      baseY: up.position.y,
+      baseZ: up.position.z,
+      lift: 0.35,
+      kind: "up",
+    })
+  }
+
+  // Smoke streaming aft and rising behind the fire.
+  for (let i = 0; i < 4; i += 1) {
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0x1a1410,
+      transparent: true,
+      opacity: 0.32 - i * 0.04,
+      depthWrite: false,
+    })
+    mat.userData.baseOp = 0.32 - i * 0.04
+    const puff = new THREE.Mesh(new THREE.SphereGeometry(r * (0.4 + i * 0.18), 8, 8), mat)
+    puff.position.set(
+      (i % 2 === 0 ? -1 : 1) * r * 0.15 * (i + 1) * 0.35,
+      r * (0.55 + i * 0.4),
+      -r * (1.6 + i * 0.85)
+    )
+    group.add(puff)
+    layers.push({
+      mesh: puff,
+      mat,
+      baseX: puff.position.x,
+      baseY: puff.position.y,
+      baseZ: puff.position.z,
+      lift: 0.5,
+      kind: "smoke",
+    })
+  }
+
+  const light = new THREE.PointLight(0xff4a18, 0, r * 18, 2)
+  light.position.set(0, r * 0.35, -r * 0.9)
+  group.add(light)
+  return { group, layers, light }
+}
+
+/** Realistic FedEx Express titles — purple “Fed” + orange “Ex”, registration, fin mark. */
+function addFedexMd11Brand(root, def, mats) {
+  const brand = new THREE.Group()
+  brand.name = "fedexBrand"
+  const purple = mats.accent.clone()
+  purple.name = "fedex-purple"
+  const orange = (mats.accent2 || mats.accent).clone()
+  orange.name = "fedex-orange"
+  orange.emissiveIntensity = 0
+
+  const titleTex = canvasTexture((ctx, w, h) => {
+    ctx.clearRect(0, 0, w, h)
+    ctx.textAlign = "left"
+    ctx.textBaseline = "middle"
+    const size = Math.floor(h * 0.55)
+    ctx.font = `900 ${size}px Arial Black, Impact, sans-serif`
+    const fed = "Fed"
+    const ex = "Ex"
+    const fedW = ctx.measureText(fed).width
+    const total = fedW + ctx.measureText(ex).width
+    const x0 = (w - total) / 2
+    ctx.fillStyle = "#4D148C"
+    ctx.fillText(fed, x0, h * 0.42)
+    ctx.fillStyle = "#FF6600"
+    ctx.fillText(ex, x0 + fedW, h * 0.42)
+    ctx.fillStyle = "#4D148C"
+    ctx.font = `700 ${Math.floor(h * 0.16)}px Arial, sans-serif`
+    ctx.textAlign = "center"
+    ctx.fillText("Express", w * 0.5, h * 0.82)
+  }, 1024, 256)
+  titleTex.colorSpace = THREE.SRGBColorSpace
+
+  const titleW = def.length * 0.22
+  const titleH = def.radius * 0.42
+  for (const side of [-1, 1]) {
+    const title = new THREE.Mesh(
+      new THREE.PlaneGeometry(titleW, titleH),
+      new THREE.MeshBasicMaterial({
+        map: titleTex,
+        transparent: true,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      })
+    )
+    title.position.set(side * (def.radius + 0.05), def.radius * 0.08, -def.length * 0.06)
+    title.rotation.y = side > 0 ? -Math.PI / 2 : Math.PI / 2
+    brand.add(title)
+  }
+
+  // Tail registration
+  const regTex = labelTexture(def.number || "N601FE", "#4D148C")
+  for (const side of [-1, 1]) {
+    const reg = new THREE.Mesh(
+      new THREE.PlaneGeometry(def.length * 0.08, def.radius * 0.18),
+      new THREE.MeshBasicMaterial({ map: regTex, transparent: true, depthWrite: false, side: THREE.DoubleSide })
+    )
+    reg.position.set(side * (def.radius + 0.04), -def.radius * 0.15, -def.length * 0.32)
+    reg.rotation.y = side > 0 ? -Math.PI / 2 : Math.PI / 2
+    brand.add(reg)
+  }
+
+  // Fin FedEx flash
+  const finTex = canvasTexture((ctx, w, h) => {
+    ctx.clearRect(0, 0, w, h)
+    ctx.textAlign = "center"
+    ctx.textBaseline = "middle"
+    ctx.font = `900 ${Math.floor(h * 0.42)}px Arial Black, Impact, sans-serif`
+    const fedW = ctx.measureText("Fed").width
+    const x0 = w * 0.5 - (fedW + ctx.measureText("Ex").width) / 2
+    ctx.textAlign = "left"
+    ctx.fillStyle = "#4D148C"
+    ctx.fillText("Fed", x0, h * 0.52)
+    ctx.fillStyle = "#FF6600"
+    ctx.fillText("Ex", x0 + fedW, h * 0.52)
+  }, 512, 256)
+  finTex.colorSpace = THREE.SRGBColorSpace
+  const finMark = new THREE.Mesh(
+    new THREE.PlaneGeometry(def.length * 0.09, def.length * 0.045),
+    new THREE.MeshBasicMaterial({ map: finTex, transparent: true, depthWrite: false, side: THREE.DoubleSide })
+  )
+  finMark.rotation.y = Math.PI / 2
+  finMark.position.set(0.12, def.radius * 0.55 + def.length * 0.12, -def.length * 0.4)
+  brand.add(finMark)
+
+  root.add(brand)
+  return brand
+}
+
+/**
+ * MD-11 freighter airframe details: cockpit panes, wing-body fairing, main-deck
+ * cargo door, belly holds, #3 inlet trunk into the T-tail, radome, antennas.
+ */
+function addMd11Airframe(skin, def, mats) {
+  const R = def.radius
+  const L = def.length
+
+  // Sharper Douglas radome
+  const radome = new THREE.Mesh(new THREE.SphereGeometry(R * 0.92, 28, 20), mats.paint)
+  radome.scale.set(0.88, 0.82, 1.35)
+  radome.position.set(0, R * 0.02, L * 0.44)
+  radome.castShadow = true
+  skin.add(radome)
+
+  // Multi-pane cockpit windshield (flat-ish MD-11 look)
+  const glassY = R * 0.42
+  const glassZ = L * 0.34
+  const panes = [
+    { x: 0, y: glassY + 0.08, z: glassZ + 0.35, w: R * 0.7, h: R * 0.28, yaw: 0, pitch: -0.35 },
+    { x: -R * 0.55, y: glassY, z: glassZ + 0.15, w: R * 0.55, h: R * 0.32, yaw: -0.55, pitch: -0.2 },
+    { x: R * 0.55, y: glassY, z: glassZ + 0.15, w: R * 0.55, h: R * 0.32, yaw: 0.55, pitch: -0.2 },
+    { x: -R * 0.72, y: glassY - 0.05, z: glassZ - 0.05, w: R * 0.38, h: R * 0.28, yaw: -0.95, pitch: -0.08 },
+    { x: R * 0.72, y: glassY - 0.05, z: glassZ - 0.05, w: R * 0.38, h: R * 0.28, yaw: 0.95, pitch: -0.08 },
+  ]
+  for (const p of panes) {
+    const pane = new THREE.Mesh(new THREE.BoxGeometry(0.05, p.h, p.w), mats.glass)
+    pane.position.set(p.x, p.y, p.z)
+    pane.rotation.y = p.yaw
+    pane.rotation.x = p.pitch
+    skin.add(pane)
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(0.04, p.h * 1.08, p.w * 1.08), mats.dark)
+    frame.position.copy(pane.position)
+    frame.rotation.copy(pane.rotation)
+    skin.add(frame)
+  }
+  const brow = new THREE.Mesh(
+    new THREE.BoxGeometry(R * 1.65, R * 0.08, R * 0.55),
+    mats.dark
+  )
+  brow.position.set(0, R * 0.62, L * 0.32)
+  brow.rotation.x = -0.25
+  skin.add(brow)
+
+  // Crew windows only (freighter)
+  for (let i = 0; i < 5; i += 1) {
+    const z = L * 0.22 - i * 0.55
+    for (const side of [-1, 1]) {
+      const frame = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.38, 0.48), mats.dark)
+      frame.position.set(side * (R + 0.01), R * 0.28, z)
+      const win = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.3, 0.38), mats.glass)
+      win.position.set(side * (R + 0.03), R * 0.28, z)
+      skin.add(frame, win)
+    }
+  }
+
+  // Wing–body fairing / keel
+  const keel = new THREE.Mesh(new THREE.SphereGeometry(R * 1.05, 24, 16), mats.paint)
+  keel.scale.set(0.62, 0.42, 3.1)
+  keel.position.set(0, -R * 0.58, def.wing.z + 0.4)
+  keel.castShadow = true
+  skin.add(keel)
+
+  // Grey belly panel (classic freighter two-tone)
+  const bellyMat = mats.dark.clone()
+  bellyMat.color.set("#6a6e74")
+  bellyMat.metalness = 0.35
+  bellyMat.roughness = 0.55
+  const belly = new THREE.Mesh(
+    new THREE.CylinderGeometry(R * 0.98, R * 0.98, L * 0.55, 32, 1, true, Math.PI * 0.15, Math.PI * 0.7),
+    bellyMat
+  )
+  belly.rotation.z = Math.PI / 2
+  belly.rotation.y = Math.PI / 2
+  belly.position.set(0, -R * 0.15, -L * 0.02)
+  skin.add(belly)
+
+  // Port main-deck cargo door (forward of wing)
+  const doorZ = L * 0.08
+  const doorH = R * 1.35
+  const doorW = L * 0.11
+  const doorFrame = new THREE.Mesh(new THREE.BoxGeometry(0.05, doorH, doorW), mats.dark)
+  doorFrame.position.set(-(R + 0.02), R * 0.05, doorZ)
+  const doorPanel = new THREE.Mesh(new THREE.BoxGeometry(0.04, doorH * 0.92, doorW * 0.9), mats.paint)
+  doorPanel.position.set(-(R + 0.05), R * 0.05, doorZ)
+  // Door hinge rail + latch strip
+  const hingeRail = new THREE.Mesh(new THREE.BoxGeometry(0.06, doorH * 0.95, 0.08), mats.metal)
+  hingeRail.position.set(-(R + 0.06), R * 0.05, doorZ + doorW * 0.42)
+  skin.add(doorFrame, doorPanel, hingeRail)
+  for (let i = 0; i < 3; i += 1) {
+    const latch = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.08, 0.12), mats.metal)
+    latch.position.set(-(R + 0.07), -doorH * 0.3 + i * doorH * 0.3, doorZ - doorW * 0.35)
+    skin.add(latch)
+  }
+
+  // Belly cargo doors
+  for (const z of [-L * 0.08, L * 0.12]) {
+    const hold = new THREE.Mesh(
+      new THREE.BoxGeometry(R * 1.1, 0.06, L * 0.1),
+      mats.dark
+    )
+    hold.position.set(0, -R * 0.95, z)
+    skin.add(hold)
+  }
+
+  // #3 engine inlet trunk — the MD-11 signature scoop into the fin root
+  const trunk = new THREE.Group()
+  trunk.position.set(0, R * 0.78, -L * 0.34)
+  const scoop = new THREE.Mesh(
+    new THREE.CylinderGeometry(R * 0.38, R * 0.52, R * 2.8, 22),
+    mats.paint
+  )
+  scoop.rotation.x = Math.PI / 2
+  scoop.position.set(0, R * 0.12, -R * 0.35)
+  scoop.castShadow = true
+  const scoopLip = new THREE.Mesh(new THREE.TorusGeometry(R * 0.46, R * 0.055, 10, 24), mats.metal)
+  scoopLip.position.set(0, R * 0.12, R * 1.0)
+  const scoopDark = new THREE.Mesh(new THREE.CircleGeometry(R * 0.38, 22), mats.dark)
+  scoopDark.position.set(0, R * 0.12, R * 0.95)
+  // S-duct belly panel under the scoop
+  const duct = new THREE.Mesh(new THREE.BoxGeometry(R * 0.85, R * 0.35, R * 1.8), mats.paint)
+  duct.position.set(0, -R * 0.05, -R * 0.15)
+  duct.castShadow = true
+  // Blended cheek fairings into fin
+  for (const side of [-1, 1]) {
+    const cheek = new THREE.Mesh(new THREE.SphereGeometry(R * 0.5, 14, 12), mats.paint)
+    cheek.scale.set(0.5, 0.9, 1.55)
+    cheek.position.set(side * R * 0.32, R * 0.4, -R * 0.55)
+    cheek.castShadow = true
+    trunk.add(cheek)
+  }
+  trunk.add(scoop, scoopLip, scoopDark, duct)
+  skin.add(trunk)
+
+  // APU exhaust on tail cone
+  const apu = new THREE.Mesh(new THREE.CylinderGeometry(R * 0.1, R * 0.14, R * 0.45, 12), mats.dark)
+  apu.rotation.x = Math.PI / 2
+  apu.position.set(R * 0.25, -R * 0.05, -L * 0.47)
+  skin.add(apu)
+
+  // Satcom / antenna farm
+  const sat = new THREE.Mesh(new THREE.SphereGeometry(R * 0.16, 12, 10), mats.paint)
+  sat.scale.set(1.2, 0.4, 1.5)
+  sat.position.set(0, R * 1.02, L * 0.05)
+  skin.add(sat)
+  const ant = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, R * 0.45, 6), mats.dark)
+  ant.position.set(0, R * 1.15, -L * 0.05)
+  skin.add(ant)
+
+  // Subtle panel seams
+  for (let i = 0; i < 7; i += 1) {
+    const seam = new THREE.Mesh(new THREE.BoxGeometry(R * 1.98, 0.01, 0.018), mats.dark)
+    seam.position.set(0, R * 0.15, -L * 0.28 + i * L * 0.09)
+    skin.add(seam)
+  }
+}
+
+/** MD-11 wing turbofan — long high-bypass cowling, thick intake lip, short pylon. */
+function makeMd11Turbofan(engine, mats) {
+  const mount = new THREE.Group()
+  const r = engine.r
+  const cowling = new THREE.Mesh(
+    new THREE.CylinderGeometry(r * 1.02, r * 0.86, r * 4.0, 28),
+    mats.paint
+  )
+  cowling.rotation.x = Math.PI / 2
+  cowling.castShadow = true
+  const lip = new THREE.Mesh(new THREE.TorusGeometry(r * 0.94, r * 0.09, 12, 28), mats.metal)
+  lip.position.z = r * 1.95
+  const intake = new THREE.Mesh(new THREE.CircleGeometry(r * 0.88, 28), mats.dark)
+  intake.position.z = r * 1.9
+  const fan = new THREE.Mesh(
+    new THREE.CylinderGeometry(r * 0.84, r * 0.84, r * 0.1, 24),
+    new THREE.MeshStandardMaterial({ color: 0xb8c0c8, metalness: 0.85, roughness: 0.25 })
+  )
+  fan.rotation.x = Math.PI / 2
+  fan.position.z = r * 1.55
+  const spinner = new THREE.Mesh(new THREE.SphereGeometry(r * 0.22, 12, 10), mats.metal)
+  spinner.scale.set(1, 1, 1.4)
+  spinner.position.z = r * 1.65
+  const core = new THREE.Mesh(
+    new THREE.CylinderGeometry(r * 0.4, r * 0.48, r * 1.6, 18),
+    mats.metal
+  )
+  core.rotation.x = Math.PI / 2
+  core.position.z = -r * 0.35
+  const nozzle = new THREE.Mesh(
+    new THREE.CylinderGeometry(r * 0.36, r * 0.5, r * 0.85, 18),
+    mats.dark
+  )
+  nozzle.rotation.x = Math.PI / 2
+  nozzle.position.z = -r * 1.85
+  const mixer = new THREE.Mesh(new THREE.TorusGeometry(r * 0.42, r * 0.04, 8, 18), mats.metal)
+  mixer.position.z = -r * 1.55
+  mount.add(cowling, lip, intake, fan, spinner, core, nozzle, mixer)
+  if (engine.pylon) {
+    const pylonH = Math.max(0.55, Math.abs(engine.y) * 0.42 + r * 0.55)
+    const pylon = new THREE.Mesh(
+      new THREE.BoxGeometry(r * 0.32, pylonH, r * 2.2),
+      mats.paint
+    )
+    pylon.position.set(0, pylonH * 0.42 + r * 0.15, r * 0.1)
+    pylon.castShadow = true
+    const fillet = new THREE.Mesh(new THREE.BoxGeometry(r * 0.55, r * 0.22, r * 1.6), mats.paint)
+    fillet.position.set(0, Math.abs(engine.y) * 0.08 + r * 0.55, r * 0.15)
+    mount.add(pylon, fillet)
+  }
+  return mount
+}
+
+/** #3 T-tail engine — short nacelle nestled in the fin root, aft of the inlet trunk. */
+function makeMd11TailEngine(engine, mats) {
+  const mount = new THREE.Group()
+  const r = engine.r
+  const nacelle = new THREE.Mesh(
+    new THREE.CylinderGeometry(r * 0.95, r * 0.78, r * 3.2, 24),
+    mats.paint
+  )
+  nacelle.rotation.x = Math.PI / 2
+  nacelle.castShadow = true
+  const intake = new THREE.Mesh(new THREE.CircleGeometry(r * 0.7, 22), mats.dark)
+  intake.position.z = r * 1.55
+  const lip = new THREE.Mesh(new THREE.TorusGeometry(r * 0.75, r * 0.06, 10, 22), mats.metal)
+  lip.position.z = r * 1.45
+  const core = new THREE.Mesh(
+    new THREE.CylinderGeometry(r * 0.32, r * 0.4, r * 0.7, 14),
+    mats.metal
+  )
+  core.rotation.x = Math.PI / 2
+  core.position.z = -r * 1.35
+  const nozzle = new THREE.Mesh(
+    new THREE.CylinderGeometry(r * 0.3, r * 0.42, r * 0.55, 14),
+    mats.dark
+  )
+  nozzle.rotation.x = Math.PI / 2
+  nozzle.position.z = -r * 1.75
+  // Vertical fin fillet so #3 reads as built into the tail
+  const fillet = new THREE.Mesh(new THREE.BoxGeometry(r * 0.35, r * 1.4, r * 2.2), mats.paint)
+  fillet.position.set(0, r * 0.55, -r * 0.2)
+  fillet.castShadow = true
+  mount.add(nacelle, intake, lip, core, nozzle, fillet)
+  return mount
 }
 
 /** High-bypass turbofan nacelle for the Queen — intake lip, fan face, core, nozzle. */
@@ -499,7 +1027,8 @@ function measureCenterBelly(root) {
   root.updateMatrixWorld(true)
   const box = new THREE.Box3().setFromObject(root)
   const size = box.getSize(new THREE.Vector3())
-  const halfBody = Math.max(0.4, size.x * 0.12)
+  // Keep this tight — a wide gate pulls in wing engines and reports y≈0.
+  const halfBody = Math.max(0.35, Math.min(size.x * 0.06, size.x * 0.5))
   let minY = Infinity
   const point = new THREE.Vector3()
   root.traverse((node) => {
@@ -510,10 +1039,60 @@ function measureCenterBelly(root) {
       point.fromBufferAttribute(pos, i).applyMatrix4(node.matrixWorld)
       root.worldToLocal(point)
       if (Math.abs(point.x) > halfBody) continue
+      // Mid-body only — skip nose/tail extremes.
+      if (point.z > size.z * 0.35 || point.z < -size.z * 0.3) continue
       minY = Math.min(minY, point.y)
     }
   })
   return Number.isFinite(minY) ? minY : 0
+}
+
+/**
+ * Y where gear struts should meet the airframe, in CRAFT-ROOT local space.
+ * Samples the model underside near the centerline and clamps to the outer
+ * skin so we never hang gear from cabin-volume percentiles (that left a
+ * multi-meter gap under the belly).
+ */
+function measureGearAttachY(craftRoot, modelRoot) {
+  craftRoot.updateMatrixWorld(true)
+  modelRoot.updateMatrixWorld(true)
+  const worldBox = new THREE.Box3().setFromObject(modelRoot)
+  const min = worldBox.min.clone()
+  const max = worldBox.max.clone()
+  craftRoot.worldToLocal(min)
+  craftRoot.worldToLocal(max)
+  const loY = Math.min(min.y, max.y)
+  const hiY = Math.max(min.y, max.y)
+  const loX = Math.min(min.x, max.x)
+  const hiX = Math.max(min.x, max.x)
+  const loZ = Math.min(min.z, max.z)
+  const hiZ = Math.max(min.z, max.z)
+  const cx = (loX + hiX) * 0.5
+  const cz = (loZ + hiZ) * 0.5
+  const halfX = Math.max(0.22, (hiX - loX) * 0.04)
+  const halfZ = Math.max(0.8, (hiZ - loZ) * 0.18)
+
+  const samples = []
+  const point = new THREE.Vector3()
+  modelRoot.traverse((node) => {
+    if (!node.isMesh || !node.geometry?.attributes?.position) return
+    const pos = node.geometry.attributes.position
+    const step = Math.max(1, Math.floor(pos.count / 2000))
+    for (let i = 0; i < pos.count; i += step) {
+      point.fromBufferAttribute(pos, i).applyMatrix4(node.matrixWorld)
+      craftRoot.worldToLocal(point)
+      if (Math.abs(point.x - cx) > halfX) continue
+      if (Math.abs(point.z - cz) > halfZ) continue
+      samples.push(point.y)
+    }
+  })
+  if (samples.length < 6) return loY + 0.04
+  samples.sort((a, b) => a - b)
+  // ~5th percentile skips antenna crumbs; hard cap keeps us on outer skin.
+  const idx = Math.min(samples.length - 1, Math.max(0, Math.floor(samples.length * 0.05)))
+  const pct = samples[idx]
+  const cap = loY + Math.max(0.08, (hiY - loY) * 0.1)
+  return Math.min(pct, cap)
 }
 
 function seatPoint(def, real = null) {
@@ -880,13 +1459,29 @@ function buildCockpit(def, mats, seat) {
     new THREE.MeshStandardMaterial({ color: 0x243040, roughness: 1 })
   )
   carpet.position.set(0, seat.y - 0.55, seat.z + 0.05)
-  const roof = new THREE.Mesh(new THREE.BoxGeometry(wide * 0.96, 0.05, depth * 0.92), liner)
-  roof.position.set(0, seat.y + (fighter ? 0.58 : 0.78), seat.z + 0.08)
+  // Roof stops short of the windscreen so the forward view stays open.
+  const roof = new THREE.Mesh(new THREE.BoxGeometry(wide * 0.96, 0.05, depth * 0.62), liner)
+  roof.position.set(0, seat.y + (fighter ? 0.58 : 0.78), seat.z - 0.08)
   office.add(floor, carpet, roof)
 
+  // Nearly clear cabin glass — milky transmission was blocking the outside view.
+  const clearView = new THREE.MeshPhysicalMaterial({
+    color: 0xb8d4ea,
+    metalness: 0,
+    roughness: 0.02,
+    transparent: true,
+    opacity: 0.14,
+    transmission: 0.92,
+    thickness: 0.15,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    envMapIntensity: 0.8,
+  })
+
   for (const side of [-1, 1]) {
-    const wall = new THREE.Mesh(new THREE.BoxGeometry(0.06, fighter ? 1.05 : 1.35, depth), liner)
-    wall.position.set(side * wide * 0.49, seat.y + 0.08, seat.z + 0.08)
+    // Side walls leave a window cutout forward of the seat.
+    const wall = new THREE.Mesh(new THREE.BoxGeometry(0.06, fighter ? 1.05 : 1.35, depth * 0.72), liner)
+    wall.position.set(side * wide * 0.49, seat.y + 0.08, seat.z - 0.12)
     office.add(wall)
     // A-pillar / windshield post
     const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.09, fighter ? 0.95 : 1.15, 0.1), mats.dark)
@@ -896,30 +1491,32 @@ function buildCockpit(def, mats, seat) {
     office.add(pillar)
     // Side window glass
     const sideGlass = new THREE.Mesh(
-      new THREE.BoxGeometry(0.03, fighter ? 0.38 : 0.48, 0.55),
-      mats.glass
+      new THREE.BoxGeometry(0.03, fighter ? 0.42 : 0.55, 0.7),
+      clearView
     )
-    sideGlass.position.set(side * wide * 0.485, seat.y + 0.32, seat.z + 0.55)
+    sideGlass.position.set(side * wide * 0.485, seat.y + 0.38, seat.z + 0.62)
+    sideGlass.renderOrder = 2
     office.add(sideGlass)
   }
 
-  // Center windshield post + multi-pane glass.
+  // Center windshield post + multi-pane glass (clear so runway / sky show through).
   const centerPost = new THREE.Mesh(new THREE.BoxGeometry(0.07, fighter ? 0.55 : 0.7, 0.06), mats.dark)
   centerPost.position.set(0, seat.y + 0.48, seat.z + depth * 0.46)
   office.add(centerPost)
-  const glassH = fighter ? 0.48 : 0.62
+  const glassH = fighter ? 0.55 : 0.72
   const paneW = dashWPane(wide, fighter)
   for (const side of [-1, 1]) {
-    const pane = new THREE.Mesh(new THREE.BoxGeometry(paneW, glassH, 0.035), mats.glass)
-    pane.position.set(side * (paneW * 0.52 + 0.04), seat.y + 0.48, seat.z + depth * 0.475)
-    pane.rotation.x = -0.18
+    const pane = new THREE.Mesh(new THREE.BoxGeometry(paneW, glassH, 0.03), clearView)
+    pane.position.set(side * (paneW * 0.52 + 0.04), seat.y + 0.52, seat.z + depth * 0.475)
+    pane.rotation.x = -0.12
     pane.rotation.y = side * 0.08
+    pane.renderOrder = 2
     office.add(pane)
   }
-  // Brow / eyebrow panel above windshield
-  const brow = new THREE.Mesh(new THREE.BoxGeometry(wide * 0.9, 0.08, 0.22), plastic)
-  brow.position.set(0, seat.y + (fighter ? 0.72 : 0.86), seat.z + depth * 0.38)
-  brow.rotation.x = 0.35
+  // Slim brow — kept high so it does not fill the forward FOV.
+  const brow = new THREE.Mesh(new THREE.BoxGeometry(wide * 0.9, 0.06, 0.14), plastic)
+  brow.position.set(0, seat.y + (fighter ? 0.82 : 0.96), seat.z + depth * 0.28)
+  brow.rotation.x = 0.28
   office.add(brow)
 
   const seatW = Math.min(0.58, wide * 0.26)
@@ -951,17 +1548,17 @@ function buildCockpit(def, mats, seat) {
   if (airliner) office.add(makeSeat(-seatX))
 
   const dashW = wide * 0.94
-  // Glare shield with thick lip
-  const glare = new THREE.Mesh(new THREE.BoxGeometry(dashW, 0.1, 0.62), plastic)
-  glare.position.set(0, seat.y + 0.26, seat.z + 0.82)
-  glare.rotation.x = -0.32
-  const glareLip = new THREE.Mesh(new THREE.BoxGeometry(dashW * 1.01, 0.04, 0.08), bezel)
-  glareLip.position.set(0, seat.y + 0.3, seat.z + 1.05)
+  // Lower glare shield so the horizon stays visible above the panel.
+  const glare = new THREE.Mesh(new THREE.BoxGeometry(dashW, 0.08, 0.48), plastic)
+  glare.position.set(0, seat.y + 0.18, seat.z + 0.78)
+  glare.rotation.x = -0.38
+  const glareLip = new THREE.Mesh(new THREE.BoxGeometry(dashW * 1.01, 0.03, 0.06), bezel)
+  glareLip.position.set(0, seat.y + 0.22, seat.z + 0.98)
   const dash = new THREE.Mesh(new THREE.BoxGeometry(dashW, 0.5, 0.42), plastic)
   dash.position.set(0, seat.y - 0.02, seat.z + 0.74)
   // MCP mode-control strip under the glare
   const mcp = new THREE.Mesh(new THREE.BoxGeometry(dashW * 0.72, 0.06, 0.12), bezel)
-  mcp.position.set(0, seat.y + 0.2, seat.z + 0.98)
+  mcp.position.set(0, seat.y + 0.14, seat.z + 0.92)
   office.add(glare, glareLip, dash, mcp)
 
   const pfd = makePfdTexture()
@@ -1278,7 +1875,8 @@ function buildCockpit(def, mats, seat) {
     eicas,
     screens: { pfd, nd, eicas },
     switches,
-    eyeOffset: new THREE.Vector3(seatX, 0.48, 0.08),
+    // Sit the eye up and forward so the clear windscreen frames the outside world.
+    eyeOffset: new THREE.Vector3(seatX, 0.56, 0.34),
     engineCount,
   }
 }
@@ -1368,6 +1966,7 @@ export function createAircraft(rawDef) {
   const wheels = []
   const props = []
   const jets = []
+  const engineFires = []
   const ailerons = []
   const elevators = []
   root.name = def.id
@@ -1388,7 +1987,8 @@ export function createAircraft(rawDef) {
   skin.add(fuselage)
 
   // Cockpit windshield — the silhouette cue that reads “airplane.”
-  if (["tube", "jumbo", "biz", "herc", "twin", "light", "warbird"].includes(def.profile)) {
+  // MD-11 gets a multi-pane Douglas windshield in addMd11Airframe.
+  if (def.id !== "md11" && ["tube", "jumbo", "biz", "herc", "twin", "light", "warbird"].includes(def.profile)) {
     const screen = new THREE.Mesh(
       new THREE.SphereGeometry(def.radius * 0.92, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.42),
       mats.glass
@@ -1415,6 +2015,8 @@ export function createAircraft(rawDef) {
 
   if (def.id === "b747") {
     addQueen747Airframe(skin, def, mats)
+  } else if (def.id === "md11") {
+    addMd11Airframe(skin, def, mats)
   } else if (def.hump === "front") {
     const hump = new THREE.Mesh(new THREE.SphereGeometry(def.radius * 0.78, 20, 14), mats.paint)
     hump.scale.set(0.92, 0.78, 2.35)
@@ -1429,10 +2031,17 @@ export function createAircraft(rawDef) {
     skin.add(hump)
   }
 
+  const skipGenericLivery = def.id === "b747" || def.id === "md11"
+  const isFedex = def.brand === "fedex" || def.lockedLivery === "fedex"
+  if (!skipGenericLivery) {
   for (const side of [-1, 1]) {
     const stripeLen = def.profile === "concorde" ? fuseLength * 0.48 : fuseLength * 0.62
     const stripe = new THREE.Mesh(
-      new THREE.BoxGeometry(0.04, Math.min(0.22, def.radius * 0.16), stripeLen),
+      new THREE.BoxGeometry(
+        0.04,
+        Math.min(0.22, def.radius * 0.16),
+        stripeLen
+      ),
       mats.accent
     )
     stripe.position.set(
@@ -1450,8 +2059,9 @@ export function createAircraft(rawDef) {
       skin.add(belly)
     }
   }
+  }
 
-  if (def.profile !== "concorde") {
+  if (def.profile !== "concorde" && !skipGenericLivery) {
     for (let i = 0; i < 5; i += 1) {
       const seam = new THREE.Mesh(
         new THREE.BoxGeometry(def.radius * 1.95, 0.012, 0.02),
@@ -1462,13 +2072,20 @@ export function createAircraft(rawDef) {
     }
   }
 
-  if (def.id !== "b747" && ["tube", "jumbo", "biz", "herc", "concorde"].includes(def.profile)) {
-    const count = Math.max(8, Math.floor(def.length / (def.profile === "concorde" ? 2.6 : 2.1)))
+  if (!skipGenericLivery && ["tube", "jumbo", "biz", "herc", "concorde"].includes(def.profile)) {
+    const freighter = def.freighter || isFedex
+    const count = freighter
+      ? 4
+      : Math.max(8, Math.floor(def.length / (def.profile === "concorde" ? 2.6 : 2.1)))
     for (let i = 0; i < count; i += 1) {
       // Keep cabin windows off the droop-nose / cockpit area.
-      const z0 = def.profile === "concorde" ? -def.length * 0.2 : -def.length * 0.22
-      const zSpan = def.profile === "concorde" ? def.length * 0.32 : def.length * 0.42
-      const z = z0 + (i / (count - 1)) * zSpan
+      const z0 = freighter
+        ? def.length * 0.18
+        : def.profile === "concorde" ? -def.length * 0.2 : -def.length * 0.22
+      const zSpan = freighter
+        ? def.length * 0.08
+        : def.profile === "concorde" ? def.length * 0.32 : def.length * 0.42
+      const z = z0 + (count === 1 ? 0 : (i / (count - 1)) * zSpan)
       for (const side of [-1, 1]) {
         const frame = new THREE.Mesh(
           new THREE.BoxGeometry(
@@ -1487,7 +2104,7 @@ export function createAircraft(rawDef) {
         skin.add(frame, win)
       }
     }
-  } else {
+  } else if (!skipGenericLivery) {
     for (const side of [-1, 1]) {
       const win = new THREE.Mesh(
         new THREE.BoxGeometry(0.05, Math.min(0.36, def.radius * 0.38), Math.min(0.7, def.radius * 0.7)),
@@ -1722,11 +2339,17 @@ export function createAircraft(rawDef) {
 
   const finH = isDelta
     ? def.length * 0.145
-    : ["jumbo"].includes(def.profile)
-      ? def.length * 0.18
-      : Math.max(def.radius * 1.65, def.length * 0.14)
-  const finChord = isDelta ? def.length * 0.145 : Math.max(def.radius * 1.1, def.length * 0.085)
-  const finZ = -def.length * (isDelta ? 0.38 : 0.4)
+    : def.id === "md11"
+      ? def.length * 0.195
+      : ["jumbo"].includes(def.profile)
+        ? def.length * 0.18
+        : Math.max(def.radius * 1.65, def.length * 0.14)
+  const finChord = isDelta
+    ? def.length * 0.145
+    : def.id === "md11"
+      ? Math.max(def.radius * 1.25, def.length * 0.1)
+      : Math.max(def.radius * 1.1, def.length * 0.085)
+  const finZ = -def.length * (isDelta ? 0.38 : def.id === "md11" ? 0.42 : 0.4)
   const finXs = def.tripleTail
     ? [-def.radius * 1.1, 0, def.radius * 1.1]
     : def.twinFin
@@ -1778,12 +2401,13 @@ export function createAircraft(rawDef) {
       root.add(vPanel)
     }
   } else if (!skipStab) {
+    const stabZ = def.id === "md11" ? finZ : -def.length * 0.4
     for (const side of [-1, 1]) {
       const stab = new THREE.Mesh(
         taperedWingGeometry(side, tailSpan * 0.5, tailChord, tailChord * 0.45, tailChord * 0.2, 0.08),
         mats.paint
       )
-      stab.position.set(0, stabY, -def.length * 0.4)
+      stab.position.set(0, stabY, stabZ)
       stab.castShadow = true
       root.add(stab)
     }
@@ -1792,22 +2416,25 @@ export function createAircraft(rawDef) {
       const elevatorMesh = new THREE.Mesh(new THREE.BoxGeometry(tailSpan * 0.38, 0.05, tailChord * 0.24), mats.paint)
       elevatorMesh.position.z = -tailChord * 0.12
       elevator.add(elevatorMesh)
-      elevator.position.set(side * tailSpan * 0.22, stabY, -def.length * 0.4 - tailChord * 0.28)
+      elevator.position.set(side * tailSpan * 0.22, stabY, stabZ - tailChord * 0.28)
       root.add(elevator)
       elevators.push(elevator)
     }
   }
 
-  const numberTex = labelTexture(def.number, def.ink || "#171717")
-  const number = new THREE.Mesh(
-    new THREE.PlaneGeometry(finH * 0.55, finH * 0.2),
-    new THREE.MeshBasicMaterial({ map: numberTex, transparent: true, depthWrite: false, side: THREE.DoubleSide })
-  )
-  number.rotation.y = Math.PI / 2
-  number.position.set(0.1, def.radius * 0.55 + finH * 0.48, finZ)
-  root.add(number)
+  if (def.id !== "md11") {
+    const numberTex = labelTexture(def.number, def.ink || "#171717")
+    const number = new THREE.Mesh(
+      new THREE.PlaneGeometry(finH * 0.55, finH * 0.2),
+      new THREE.MeshBasicMaterial({ map: numberTex, transparent: true, depthWrite: false, side: THREE.DoubleSide })
+    )
+    number.rotation.y = Math.PI / 2
+    number.position.set(0.1, def.radius * 0.55 + finH * 0.48, finZ)
+    root.add(number)
+  }
 
-  for (const engine of def.engines) {
+  for (let engIndex = 0; engIndex < def.engines.length; engIndex += 1) {
+    const engine = def.engines[engIndex]
     const mount = new THREE.Group()
     mount.position.set(engine.x, engine.y, engine.z)
     if (engine.kind === "jet") {
@@ -1835,6 +2462,12 @@ export function createAircraft(rawDef) {
         nozzle.rotation.x = Math.PI / 2
         nozzle.position.z = -engine.r * 3.1
         mount.add(box, fair, intake, nozzle)
+      } else if (def.id === "md11" && Math.abs(engine.x) < 0.5) {
+        const tail = makeMd11TailEngine(engine, mats)
+        while (tail.children.length) mount.add(tail.children[0])
+      } else if (def.id === "md11") {
+        const fan = makeMd11Turbofan(engine, mats)
+        while (fan.children.length) mount.add(fan.children[0])
       } else if (def.id === "b747") {
         const queen = makeQueenTurbofan(engine, mats)
         while (queen.children.length) mount.add(queen.children[0])
@@ -1863,11 +2496,15 @@ export function createAircraft(rawDef) {
       const hot = new THREE.MeshBasicMaterial({ color: 0xff6a00, transparent: true, opacity: 0.9 })
       const flame = new THREE.Mesh(new THREE.ConeGeometry(engine.r * 0.45, engine.r * 1.5, 12), hot)
       flame.rotation.x = Math.PI / 2
-      flame.position.z = engine.buried ? -engine.r * 2.8 : def.id === "b747" ? -engine.r * 2.55 : -engine.r * 2.1
+      flame.position.z = engine.buried
+        ? -engine.r * 2.8
+        : def.id === "b747" || def.id === "md11"
+          ? -engine.r * 2.55
+          : -engine.r * 2.1
       const light = new THREE.PointLight(0xff7a2a, 0, engine.r * 8)
       light.position.copy(flame.position)
       mount.add(flame, light)
-      jets.push({ flame, mat: hot, light })
+      jets.push({ flame, mat: hot, light, engIndex })
     } else {
       if (Math.abs(engine.x) > 0.2) {
         const nacelle = new THREE.Mesh(new THREE.CylinderGeometry(engine.r * 0.28, engine.r * 0.24, engine.r * 1.5, 12), mats.paint)
@@ -1927,20 +2564,73 @@ export function createAircraft(rawDef) {
     }
   }
   } else {
-    // Real GLBs already include engines and surfaces — gear is often missing, so we add it below.
+    // Real GLBs already include engines and surfaces; gear may be a FG kit.
     root.add(rudder)
-    if (real.gearMeshes.length > 0) {
+    if (real.hasBakedGear && real.gearMeshes.length > 0 && def.gear.mode === "retract") {
+      // Separate gear meshes (when named) tuck away; fused meshes stay visible.
+      for (const mesh of real.gearMeshes) {
+        mesh.userData.gearHome = {
+          pos: mesh.position.clone(),
+          rot: mesh.rotation.clone(),
+          visible: mesh.visible,
+        }
+      }
       parts.push(makePart("gear", (t) => {
         for (const mesh of real.gearMeshes) {
-          mesh.visible = t > 0.2
+          const show = t > 0.18
+          mesh.visible = show
+          // Slight tuck so retract reads even on coarse named parts.
+          if (mesh.userData.gearHome) {
+            mesh.position.y = mesh.userData.gearHome.pos.y + (1 - t) * Math.min(1.2, def.radius * 0.35)
+          }
         }
       }, { lambda: 2.3, start: 1 }))
     }
   }
 
-  const bakedGear = useReal && real.gearMeshes.length > 0
+  // Prefer FlightGear gear kits on hangar GLBs that lack real legs.
+  // If a kit is missing/failed, fall back to procedural stilts so planes aren't bare.
+  const bakedGear = useReal && real.hasBakedGear
   let fittedGearHeight = useReal ? (real.restClearance ?? 0.04) : def.gear.height
-  if (!bakedGear) {
+  let usedGearKit = false
+  if (useReal && real.needsGearKit) {
+    // Measure belly + floor in craft-root space after the GLB is parented.
+    // Drop must match belly→floor (not catalog gear.height) or stilts lift the jet.
+    root.updateMatrixWorld(true)
+    const floorBox = new THREE.Box3().setFromObject(real.root)
+    const floorMin = floorBox.min.clone()
+    const floorMax = floorBox.max.clone()
+    root.worldToLocal(floorMin)
+    root.worldToLocal(floorMax)
+    const floorY = Math.min(floorMin.y, floorMax.y)
+    const bellyY = measureGearAttachY(root, real.root)
+    const kit = buildGearKitGroup(def, bellyY, { floorY })
+    if (kit) {
+      usedGearKit = true
+      root.add(kit.group)
+      for (const wheel of kit.wheels) wheels.push(wheel)
+      if (def.gear.mode === "retract" && !kit.skids) {
+        parts.push(makePart("gear", (t) => {
+          for (const leg of kit.retractRoots) {
+            const home = leg.userData.gearHome
+            if (!home) continue
+            const show = t > 0.18
+            leg.visible = show
+            leg.position.y = home.pos.y + (1 - t) * Math.min(1.6, def.radius * 0.45)
+            // Fold mains slightly inward for a readable retract.
+            const side = Math.sign(home.pos.x) || 0
+            leg.rotation.z = home.rot.z + (1 - t) * side * -1.15
+            if (Math.abs(side) < 0.1) leg.rotation.x = home.rot.x + (1 - t) * -1.35
+          }
+        }, { lambda: 2.3, start: 1 }))
+      }
+      root.updateMatrixWorld(true)
+      const box = new THREE.Box3().setFromObject(root)
+      // Sit on tire bottoms; keep a small pad so engines aren't buried.
+      fittedGearHeight = Math.max(0.35, -box.min.y + 0.02)
+    }
+  }
+  if (!bakedGear && !usedGearKit) {
     const wheelR = THREE.MathUtils.clamp(
       def.radius * (useReal ? 0.1 : 0.18),
       useReal ? 0.22 : 0.16,
@@ -2311,11 +3001,16 @@ export function createAircraft(rawDef) {
   const beaconMat = new THREE.MeshStandardMaterial({ color: 0xff2d2d, emissive: 0xff1d1d, emissiveIntensity: 0.2 })
   const beacon = new THREE.Mesh(new THREE.SphereGeometry(Math.max(0.06, def.radius * 0.06), 8, 8), beaconMat)
   if (useReal) {
-    const wingY = (real.size?.y || def.radius * 2) * 0.22
-    beacon.position.set(0, (real.size?.y || def.radius * 2) * 0.92, -def.length * 0.05)
+    // Sit the beacon on the fin tip (top-aft). Using full height at mid-fuselage
+    // left it floating far above the cabin roof.
+    real.root.updateMatrixWorld(true)
+    const airBox = new THREE.Box3().setFromObject(real.root)
+    const finZ = THREE.MathUtils.lerp(airBox.min.z, airBox.max.z, 0.08)
+    beacon.position.set(0, airBox.max.y + 0.06, finZ)
     skin.add(beacon)
+    const wingY = Math.min(def.radius * 0.4, airBox.max.y * 0.25)
     const spot = new THREE.SpotLight(0xfff3cf, 0, Math.max(40, def.length * 3), 0.55, 0.45, 1)
-    spot.position.set(0, wingY * 0.2, def.length * 0.42)
+    spot.position.set(0, wingY, def.length * 0.42)
     spot.target.position.set(0, -2, def.length * 0.42 + 30)
     spot.castShadow = false
     root.add(spot, spot.target)
@@ -2356,15 +3051,35 @@ export function createAircraft(rawDef) {
     root.add(leftNav, rightNav)
   }
 
+  // Engine-fire FX at each nacelle / prop (procedural + real GLB layouts).
+  for (const engine of def.engines || []) {
+    const r = Math.max(0.18, engine.r || def.radius * 0.35)
+    const fx = makeEngineFire(r)
+    const aft = engine.kind === "jet"
+      ? (engine.buried ? r * 2.8 : def.id === "b747" ? r * 2.5 : r * 2.05)
+      : r * 0.5
+    fx.group.position.set(engine.x, engine.y + r * 0.15, engine.z - aft)
+    root.add(fx.group)
+    engineFires.push(fx)
+  }
+
+  let fedexBrand = null
+  if (!useReal && (def.brand === "fedex" || def.lockedLivery === "fedex" || def.id === "md11")) {
+    fedexBrand = addFedexMd11Brand(root, def, mats)
+  }
+
   const api = {
     def,
     root,
     skin,
+    mats,
+    fedexBrand,
     parts,
     gearDoors,
     wheels,
     props,
     jets,
+    engineFires,
     ailerons,
     elevators,
     rudder,
@@ -2375,13 +3090,18 @@ export function createAircraft(rawDef) {
     seat,
     cockpit,
     useReal,
-    // Tire bottoms at local y = -fittedGearHeight when gear is down.
-    modelClearance: bakedGear ? (real.restClearance ?? 0.04) : fittedGearHeight,
+    // Real GLB + kit: tire bottoms set fittedGearHeight; gear-up sits on airframe
+    // (engines/belly near y≈0 after settle), not on the belly's mesh Y coordinate.
+    modelClearance: bakedGear
+      ? (real.restClearance ?? 0.04)
+      : fittedGearHeight,
     modelBellyClearance: bakedGear
-      ? null
-      : useReal
-        ? Math.max(fittedGearHeight, def.radius * 0.35)
-        : def.radius * 0.98,
+      ? (real.bellyClearance ?? Math.max(0.45, def.radius * 0.55))
+      : usedGearKit
+        ? Math.max(0.4, real.restClearance ?? 0.04, def.radius * 0.2)
+        : useReal
+          ? Math.max(fittedGearHeight, def.radius * 0.35)
+          : def.radius * 0.98,
     gearT: 1,
     flapT: 0,
     doorT: 0,
@@ -2390,29 +3110,33 @@ export function createAircraft(rawDef) {
     noseT: 0,
     controls: { gear: 1, flapStep: 0, spoilers: 0, doors: 0, cargo: 0, nose: 0, lights: 0 },
     setCockpit(on) {
-      // Every plane gets a full interior in cockpit cam — hide the exterior shell
-      // and anything else on the craft root that would fill the windshield.
+      // Show the flight deck; hide only the near fuselage shell that would plug
+      // the windshield. Keep wings / engines / gear so you still read the plane
+      // against the outside world.
       office.visible = on || !useReal
       skin.visible = !on
       for (const child of root.children) {
         if (child === office || child === skin) continue
+        if (child.userData?.engineFire) continue
         if (child.isLight) {
-          child.visible = !on
+          child.visible = true
           continue
         }
-        child.visible = !on
+        // Keep external bits (wings, gear, engines) visible in cockpit cam.
+        child.visible = true
       }
       for (const prop of props) {
-        if (prop.spin) prop.spin.visible = !on
-        if (prop.disc) prop.disc.visible = !on
+        if (prop.spin) prop.spin.visible = true
+        if (prop.disc) prop.disc.visible = true
       }
       for (const jet of jets) {
-        if (jet.flame) jet.flame.visible = !on
+        if (jet.flame) jet.flame.visible = true
       }
       if (!on) {
         skin.visible = true
         for (const child of root.children) {
           if (child === office) continue
+          if (child.userData?.engineFire) continue
           child.visible = true
         }
         office.visible = !useReal
@@ -2462,11 +3186,56 @@ export function updateAircraft(craft, dt, input) {
     prop.spin.rotation.z += rpm * dt
     prop.disc.material.opacity = Math.min(0.45, rpm / 160)
   }
-  for (const jet of craft.jets) {
-    jet.mat.opacity = 0.25 + input.throttle * 0.7
-    const scale = 0.45 + input.throttle * 1.8
-    jet.flame.scale.set(scale, scale, 0.4 + input.throttle * 2)
-    jet.light.intensity = input.throttle * 4
+  const fireMask = input.engineFire || []
+  for (let i = 0; i < craft.jets.length; i += 1) {
+    const jet = craft.jets[i]
+    const engKey = jet.engIndex ?? i
+    const burning = !!fireMask[engKey]
+    if (burning) {
+      jet.mat.color.setHex(0xff2200)
+      jet.mat.opacity = 0.95
+      const pulse = 1.6 + 0.55 * Math.sin(performance.now() * 0.028 + i)
+      jet.flame.scale.set(pulse, pulse, 2.8 + 1.2 * Math.sin(performance.now() * 0.04 + i))
+      jet.light.intensity = 5.5 + 2.5 * Math.sin(performance.now() * 0.035 + i)
+    } else {
+      jet.mat.color.setHex(0xff6a00)
+      jet.mat.opacity = 0.25 + input.throttle * 0.7
+      const scale = 0.45 + input.throttle * 1.8
+      jet.flame.scale.set(scale, scale, 0.4 + input.throttle * 2)
+      jet.light.intensity = input.throttle * 4
+    }
+  }
+  for (let i = 0; i < (craft.engineFires || []).length; i += 1) {
+    const fx = craft.engineFires[i]
+    const on = !!fireMask[i]
+    fx.group.visible = on
+    if (!on) {
+      fx.light.intensity = 0
+      continue
+    }
+    const t = performance.now() * 0.022
+    for (let j = 0; j < fx.layers.length; j += 1) {
+      const layer = fx.layers[j]
+      const phase = t * (2.1 + j * 0.55) + i * 1.9 + j * 0.7
+      const flicker = 0.72 + 0.38 * Math.sin(phase)
+      const lengthen = 0.88 + 0.42 * Math.sin(t * (1.7 + j * 0.35) + j)
+      if (layer.kind === "smoke") {
+        const swell = 0.95 + 0.55 * Math.sin(t * 1.15 + j)
+        layer.mesh.scale.set(swell, swell * (0.9 + 0.3 * flicker), swell * lengthen)
+        layer.mesh.position.x = layer.baseX + Math.sin(t * 0.9 + j) * 0.06
+        layer.mesh.position.y = layer.baseY + Math.sin(t * 1.4 + j) * 0.12 * layer.lift
+        layer.mesh.position.z = layer.baseZ - (0.05 + 0.12 * Math.sin(t * 1.1 + j))
+      } else {
+        // Cone local Y is the length axis (faces aft after rotX), so stretch Y for plume length.
+        const width = flicker * (layer.kind === "lick" ? 0.95 : 1)
+        layer.mesh.scale.set(width, lengthen * (layer.kind === "up" ? 1.05 : 1.15), width)
+        layer.mesh.position.x = layer.baseX + Math.sin(t * 2.6 + j) * 0.03
+        layer.mesh.position.y = layer.baseY + Math.sin(t * 3.1 + j + i) * 0.05 * (layer.lift || 0.1)
+        layer.mesh.position.z = layer.baseZ - Math.sin(t * 2.2 + j) * 0.04
+      }
+      layer.mat.opacity = (layer.mat.userData.baseOp || 0.7) * (0.62 + 0.48 * flicker)
+    }
+    fx.light.intensity = 5 + 3.5 * Math.sin(t * 3.6 + i)
   }
   const blink = Math.sin(performance.now() * 0.012) > 0.15
   craft.beacon.material.emissiveIntensity = blink ? 3.2 : 0.04

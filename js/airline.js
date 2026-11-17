@@ -23,6 +23,15 @@ export const LIVERIES = [
 
 export const DEFAULT_AIRLINE = { ...LIVERIES[0] }
 
+/** Classic FedEx Express purple + orange — locked onto the MD-11 freighter. */
+export const FEDEX_LIVERY = {
+  id: "fedex",
+  name: "FedEx Express",
+  primary: "#4D148C",
+  secondary: "#FF6600",
+  fuselage: "#f7f7f5",
+}
+
 const STORAGE_KEY = "turbo-flight-sim-2-livery"
 const STORAGE_ID_KEY = "turbo-flight-sim-2-livery-id"
 
@@ -74,12 +83,15 @@ function disposeBrand(group) {
 
 /**
  * Paint a chosen livery onto any craft (airliners, GA, fighters).
+ * Planes with `lockedLivery: "fedex"` always keep Express purple/orange.
  */
 export function applyLivery(craft, colors = loadAirlineColors()) {
   if (!craft) return
-  const primary = new THREE.Color(colors.primary)
-  const secondary = new THREE.Color(colors.secondary)
-  const fuselage = new THREE.Color(colors.fuselage)
+  const locked = craft.def?.lockedLivery === "fedex" || craft.def?.brand === "fedex"
+  const paint = locked ? FEDEX_LIVERY : colors
+  const primary = new THREE.Color(paint.primary)
+  const secondary = new THREE.Color(paint.secondary)
+  const fuselage = new THREE.Color(paint.fuselage)
 
   if (craft.airlineBrand) {
     craft.root.remove(craft.airlineBrand)
@@ -89,45 +101,74 @@ export function applyLivery(craft, colors = loadAirlineColors()) {
 
   // Keep procedural defs in sync so rebuilds / maps match.
   if (craft.def) {
-    craft.def.body = colors.fuselage
-    craft.def.accent = colors.primary
+    craft.def.body = paint.fuselage
+    craft.def.accent = paint.primary
+    if (locked) craft.def.accent2 = paint.secondary
   }
 
-  craft.root.traverse((node) => {
-    if (!node.isMesh || !node.material) return
-    const list = [].concat(node.material)
-    for (const mat of list) {
-      if (!mat || !mat.color) continue
-      const name = (mat.name || node.name || "").toLowerCase()
-      const lum = mat.color.r * 0.35 + mat.color.g * 0.45 + mat.color.b * 0.2
-      const hex = mat.color.getHex()
-
-      if (name.includes("glass") || name.includes("canopy") || mat.transparent && mat.opacity < 0.95) continue
-      if (name.includes("tire") || name.includes("wheel") || hex === 0x1a1d22 || hex === 0x111111) continue
-
-      if (name.includes("accent") || name.includes("stripe")) {
-        mat.color.copy(primary)
-      } else if (lum > 0.72 || hex === 0xffffff || hex === 0xf5f5f5 || hex === 0xf4f8fb || hex === 0xf7f9fc) {
-        mat.color.copy(fuselage)
-      } else if (mat.color.b > mat.color.r + 0.08 && mat.color.b > 0.25) {
-        mat.color.copy(primary)
-      } else if (mat.color.b > 0.35 && lum > 0.35) {
-        mat.color.copy(secondary)
-      } else if (lum > 0.45 && lum < 0.72) {
-        mat.color.copy(secondary)
-      } else if (lum > 0.2) {
-        mat.color.copy(primary)
+  // Real MD-11F already ships with a baked FedEx fuselage map — don't wash it out.
+  const keepBakedFedex = locked && craft.useReal
+  if (!keepBakedFedex) {
+    craft.root.traverse((node) => {
+      if (!node.isMesh || !node.material) return
+      // Keep FedEx titles / chevrons / nose wrap on their brand materials.
+      if (craft.fedexBrand && (node === craft.fedexBrand || craft.fedexBrand.children?.includes?.(node))) return
+      let p = node.parent
+      while (p) {
+        if (p === craft.fedexBrand || p.name === "fedexBrand") return
+        p = p.parent
       }
-      mat.needsUpdate = true
+      const list = [].concat(node.material)
+      for (const mat of list) {
+        if (!mat || !mat.color) continue
+        const name = (mat.name || node.name || "").toLowerCase()
+        const lum = mat.color.r * 0.35 + mat.color.g * 0.45 + mat.color.b * 0.2
+        const hex = mat.color.getHex()
+
+        if (name.includes("glass") || name.includes("canopy") || mat.transparent && mat.opacity < 0.95) continue
+        if (name.includes("tire") || name.includes("wheel") || hex === 0x1a1d22 || hex === 0x111111) continue
+        if (name.includes("fedex")) continue
+        // Don't recolor textured airframe parts — maps already carry the paint.
+        if (mat.map) continue
+
+        if (name.includes("accent") || name.includes("stripe")) {
+          mat.color.copy(primary)
+        } else if (lum > 0.72 || hex === 0xffffff || hex === 0xf5f5f5 || hex === 0xf4f8fb || hex === 0xf7f9fc) {
+          mat.color.copy(fuselage)
+        } else if (mat.color.b > mat.color.r + 0.08 && mat.color.b > 0.25) {
+          mat.color.copy(primary)
+        } else if (mat.color.b > 0.35 && lum > 0.35) {
+          mat.color.copy(secondary)
+        } else if (lum > 0.45 && lum < 0.72) {
+          mat.color.copy(secondary)
+        } else if (lum > 0.2) {
+          mat.color.copy(primary)
+        }
+        mat.needsUpdate = true
+      }
+    })
+
+    if (craft.mats?.paint?.color) craft.mats.paint.color.copy(fuselage)
+    if (craft.mats?.wing?.color) craft.mats.wing.color.copy(fuselage)
+    if (craft.mats?.accent?.color) craft.mats.accent.color.copy(primary)
+    if (craft.mats?.accent2?.color) craft.mats.accent2.color.copy(secondary)
+
+    // FedEx wordmark / chevron stay brand-purple — don't let airline remaps wash them.
+    if (locked && craft.fedexBrand) {
+      craft.fedexBrand.traverse((node) => {
+        if (!node.isMesh || !node.material) return
+        const name = (node.material.name || node.name || "").toLowerCase()
+        if (name.includes("fedex-orange") || name.includes("orange")) {
+          node.material.color?.copy(secondary)
+        } else if (name.includes("fedex") || name.includes("purple")) {
+          node.material.color?.copy(primary)
+        }
+      })
     }
-  })
+  }
 
-  if (craft.mats?.paint?.color) craft.mats.paint.color.copy(fuselage)
-  if (craft.mats?.wing?.color) craft.mats.wing.color.copy(fuselage)
-  if (craft.mats?.accent?.color) craft.mats.accent.color.copy(primary)
-
-  craft.airlineColors = { ...colors }
-  craft.liveryId = colors.id || "custom"
+  craft.airlineColors = { ...paint }
+  craft.liveryId = paint.id || "custom"
 }
 
 /** @deprecated use applyLivery */

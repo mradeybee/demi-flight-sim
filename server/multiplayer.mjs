@@ -84,6 +84,14 @@ function lanAddresses() {
   return list
 }
 
+function sanitizeChat(raw) {
+  return String(raw || "")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 140)
+}
+
 const server = http.createServer((req, res) => {
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`)
@@ -185,6 +193,25 @@ wss.on("connection", (ws) => {
         slot: me.slot,
         ...me.state,
       }, me.id)
+      return
+    }
+
+    if (msg.type === "chat") {
+      const text = sanitizeChat(msg.text)
+      if (!text) return
+      const now = Date.now()
+      if (me.lastChatAt && now - me.lastChatAt < 350) return
+      me.lastChatAt = now
+      const payload = {
+        type: "chat",
+        id: me.id,
+        name: me.name,
+        text,
+        at: now,
+      }
+      // Echo to sender so everyone sees the same stream.
+      send(ws, payload)
+      broadcast(payload, me.id)
     }
   })
 

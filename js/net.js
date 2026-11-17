@@ -1,6 +1,6 @@
 /** LAN WebSocket client for Turbo Flight Sim multiplayer. */
 
-export function createNet({ onWelcome, onPeerJoin, onPeerLeave, onPeerState, onPeerUpdate, onStatus }) {
+export function createNet({ onWelcome, onPeerJoin, onPeerLeave, onPeerState, onPeerUpdate, onChat, onStatus }) {
   let ws = null
   let you = null
   let peers = new Map()
@@ -40,6 +40,10 @@ export function createNet({ onWelcome, onPeerJoin, onPeerLeave, onPeerState, onP
       existing.state = msg
       peers.set(msg.id, existing)
       onPeerState?.(msg)
+      return
+    }
+    if (msg.type === "chat") {
+      onChat?.(msg)
       return
     }
     if (msg.type === "renamed") {
@@ -91,6 +95,14 @@ export function createNet({ onWelcome, onPeerJoin, onPeerLeave, onPeerState, onP
     ws.send(JSON.stringify({ type: "rename", name }))
   }
 
+  function sendChat(text) {
+    if (!ws || ws.readyState !== WebSocket.OPEN || !you) return false
+    const cleaned = String(text || "").replace(/\s+/g, " ").trim().slice(0, 140)
+    if (!cleaned) return false
+    ws.send(JSON.stringify({ type: "chat", text: cleaned }))
+    return true
+  }
+
   function disconnect() {
     closed = true
     clearTimeout(retryTimer)
@@ -100,6 +112,7 @@ export function createNet({ onWelcome, onPeerJoin, onPeerLeave, onPeerState, onP
   return {
     connect,
     sendState,
+    sendChat,
     rename,
     disconnect,
     get you() { return you },
