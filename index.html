@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <title>Turbo Flight Sim 0.1</title>
-  <link rel="stylesheet" href="css/style.css?v=169" />
+  <link rel="stylesheet" href="css/style.css?v=178" />
 </head>
 <body>
   <canvas id="view"></canvas>
@@ -190,69 +190,61 @@
       <div class="caution" data-warn="tire">FLAT TIRE</div>
       <div class="caution" data-warn="brakes">BRAKE FAIL</div>
     </div>
-    <div id="parts-panel"></div>
-    <div id="ap-panel" aria-label="Autopilot">
-      <div class="ap-title">Autopilot <kbd>B</kbd></div>
-      <button type="button" id="ap-master" class="ap-btn">AP OFF</button>
-      <div class="ap-modes">
-        <button type="button" id="ap-hdg" class="ap-btn" data-mode="hdg">HDG</button>
-        <button type="button" id="ap-alt" class="ap-btn" data-mode="alt">ALT</button>
-        <button type="button" id="ap-spd" class="ap-btn" data-mode="spd">SPD</button>
+    <div id="sys-dock">
+      <div id="sys-tools">
+        <button type="button" id="ap-toggle" aria-expanded="false" aria-controls="ap-panel">AP</button>
+        <button type="button" id="parts-toggle" aria-expanded="false" aria-controls="parts-panel">Gear</button>
       </div>
-      <button type="button" id="ap-land" class="ap-btn" title="Autoland at your airport (H)">HOME</button>
-      <div class="ap-targets">
-        <span id="ap-hdg-read">HDG —</span>
-        <span id="ap-alt-read">ALT —</span>
-        <span id="ap-spd-read">SPD —</span>
+      <div id="ap-panel" aria-label="Autopilot" hidden>
+        <div class="ap-title">Autopilot <kbd>B</kbd></div>
+        <button type="button" id="ap-master" class="ap-btn">AP OFF</button>
+        <div class="ap-modes">
+          <button type="button" id="ap-hdg" class="ap-btn" data-mode="hdg">HDG</button>
+          <button type="button" id="ap-alt" class="ap-btn" data-mode="alt">ALT</button>
+          <button type="button" id="ap-spd" class="ap-btn" data-mode="spd">SPD</button>
+        </div>
+        <button type="button" id="ap-land" class="ap-btn" title="Autoland at your airport (H)">HOME</button>
+        <div class="ap-targets">
+          <span id="ap-hdg-read">HDG —</span>
+          <span id="ap-alt-read">ALT —</span>
+          <span id="ap-spd-read">SPD —</span>
+        </div>
+        <div class="ap-trim">
+          <button type="button" data-ap-adj="hdg" data-dir="-1">HDG −</button>
+          <button type="button" data-ap-adj="hdg" data-dir="1">HDG +</button>
+          <button type="button" data-ap-adj="alt" data-dir="-1">ALT −</button>
+          <button type="button" data-ap-adj="alt" data-dir="1">ALT +</button>
+        </div>
       </div>
-      <div class="ap-trim">
-        <button type="button" data-ap-adj="hdg" data-dir="-1">HDG −</button>
-        <button type="button" data-ap-adj="hdg" data-dir="1">HDG +</button>
-        <button type="button" data-ap-adj="alt" data-dir="-1">ALT −</button>
-        <button type="button" data-ap-adj="alt" data-dir="1">ALT +</button>
-      </div>
+      <div id="parts-panel" hidden></div>
     </div>
     <div id="fly-actions" aria-label="Flight actions">
-      <button type="button" data-fly="hangar" title="Back to hangar">Hangar</button>
-      <button type="button" data-fly="cam" id="fly-cam" title="Cycle camera">Cam</button>
-      <button type="button" data-fly="cockpit" title="Cockpit view">Cockpit</button>
-      <button type="button" data-fly="orbit" title="Orbit view">Orbit</button>
-      <button type="button" data-fly="chat" id="fly-chat" title="Open chat">Chat</button>
-      <button type="button" data-fly="planes" id="fly-planes" title="Change aircraft">Planes</button>
-      <button type="button" data-fly="mouse" id="fly-mouse" title="Change how the mouse flies">Mouse</button>
       <button type="button" data-fly="jump" id="fly-jump" title="Double-tap to jump out or board">Jump</button>
-      <button type="button" data-fly="reset" title="Reset to runway">Reset</button>
-      <button type="button" data-fly="mute" id="mute-btn" title="Toggle sound">Sound on</button>
       <button type="button" data-hold="run" data-value="1" id="fly-run" title="Hold to run" hidden>Run</button>
+      <button type="button" id="fly-more" aria-expanded="false" aria-controls="fly-more-sheet">Menu</button>
+      <div id="fly-more-sheet">
+        <button type="button" data-fly="cam" id="fly-cam" title="Cycle camera">Cam</button>
+        <button type="button" data-fly="cockpit" title="Cockpit view">Cockpit</button>
+        <button type="button" data-fly="orbit" title="Orbit view">Orbit</button>
+        <button type="button" data-fly="planes" id="fly-planes" title="Change aircraft">Planes</button>
+        <button type="button" data-fly="reset" title="Reset to runway">Reset</button>
+        <button type="button" data-fly="hangar" title="Back to hangar">Hangar</button>
+        <button type="button" data-fly="chat" id="fly-chat" title="Open chat" hidden>Chat</button>
+        <button type="button" data-fly="mute" id="mute-btn" title="Toggle sound">Sound on</button>
+      </div>
     </div>
     <div id="controls">
+      <div id="aux-pad">
+        <button type="button" data-hold="yaw" data-value="-1" aria-label="Nose left">◀</button>
+        <button type="button" data-hold="brake" data-value="1" aria-label="Brake">Brake</button>
+        <button type="button" data-hold="yaw" data-value="1" aria-label="Nose right">▶</button>
+      </div>
       <div id="joy" aria-label="Flight stick">
         <div id="joy-knob"></div>
       </div>
-      <div id="aux-pad">
-        <button type="button" data-hold="yaw" data-value="-1">Nose left</button>
-        <button type="button" data-hold="brake" data-value="1">Brake</button>
-        <button type="button" data-hold="yaw" data-value="1">Nose right</button>
-      </div>
-    </div>
-    <div id="mouse-panel" aria-label="Mouse controls" hidden>
-      <div class="ap-title">Mouse</div>
-      <p id="mouse-read" class="mouse-read">Cursor steers</p>
-      <div class="mouse-modes">
-        <button type="button" data-mouse="aim">Aim</button>
-        <button type="button" data-mouse="drag">Drag</button>
-        <button type="button" data-mouse="off">Off</button>
-      </div>
-      <label class="mouse-sens">Feel
-        <input id="mouse-sens" type="range" min="0.4" max="2.2" step="0.1" value="1" />
-      </label>
-      <button type="button" id="mouse-invert">Invert off</button>
     </div>
     <div id="hints"></div>
-    <div id="fail-dock" aria-label="Failures and chat">
-      <button type="button" id="fail-chat" title="Open chat" hidden>
-        Chat<span class="chat-fly-badge" hidden>0</span>
-      </button>
+    <div id="fail-dock" aria-label="Failures">
       <div id="fail-panel" aria-label="Failures">
         <div class="fail-title">Failures <kbd>K</kbd></div>
         <p id="fail-status" class="fail-status">Random on</p>
@@ -267,13 +259,18 @@
           <button type="button" id="fail-clear" title="Clear all failures">Clear</button>
         </div>
       </div>
+      <div id="fail-tools">
+        <button type="button" id="fail-chat" title="Open chat" hidden>
+          Chat<span class="chat-fly-badge" hidden>0</span>
+        </button>
+        <button type="button" id="fail-toggle" aria-expanded="false" aria-controls="fail-panel">Fails</button>
+      </div>
     </div>
     <div id="throttle-panel">
       <div id="throttle-slider" aria-label="Throttle">
         <div id="throttle-fill"></div>
         <div id="throttle-knob"></div>
       </div>
-      <span>Throttle</span>
     </div>
   </div>
 
@@ -386,6 +383,6 @@
     }
   }
   </script>
-  <script type="module" src="js/main.js?v=171"></script>
+  <script type="module" src="js/main.js?v=211"></script>
 </body>
 </html>

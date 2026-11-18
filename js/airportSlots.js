@@ -26,7 +26,21 @@ export const SLOT_ORIGINS = [
 export const AIRPORT_SPACING = 1800
 export const PAD_LOCAL = { x: -170, z: 220 }
 export const TOWER_LOCAL = { x: 115, y: 48, z: 160 }
-export const RUNWAY_LOCAL = { x: 0, z0: 0, z1: 2000, halfWidth: 24 }
+const FT = 0.3048
+export const RUNWAY_LOCAL = {
+  x: 0,
+  z0: 0,
+  z1: 2000,
+  halfWidth: 24,
+  // Same way the aircraft is parked before takeoff: facing +Z, down the runway.
+  landHdg: 0,
+  // Last guide light sits 10 ft onto the pavement. The landing line is 10 ft past that light.
+  lightInset: 10 * FT,
+  touchClear: 10 * FT,
+  // First guide light, meters before the threshold. Be at or below 100 ft there.
+  lightLead: 1600,
+  gateAlt: 100 * FT,
+}
 
 export function slotOrigin(slot) {
   const s = Math.max(0, Math.floor(Number(slot) || 0))

@@ -10,6 +10,10 @@
   --good: #2a9d8f;
   --hud: rgba(8, 14, 22, 0.82);
   --cream: #f6f1e4;
+  --throttle-h: 196px;
+  --stick-size: 156px;
+  --aux-w: 188px;
+  --cluster-w: max(var(--stick-size), var(--aux-w));
 }
 
 * { box-sizing: border-box; }
@@ -38,13 +42,6 @@ button { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
   display: block;
   touch-action: none;
 }
-
-body.fly-mouse-aim #view,
-body.fly-mouse-drag #view {
-  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32'%3E%3Ccircle cx='16' cy='16' r='11' fill='none' stroke='%23102033' stroke-width='3'/%3E%3Ccircle cx='16' cy='16' r='10' fill='none' stroke='%23ffb703' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='2.2' fill='%23f6f1e4'/%3E%3C/svg%3E") 16 16, crosshair;
-}
-
-body.fly-mouse-off #view { cursor: default; }
 
 #boot {
   position: fixed;
@@ -874,11 +871,11 @@ body.fly-mouse-off #view { cursor: default; }
 }
 
 /* Touch controls only — displays never steal taps. */
-#hud button, #joy, #throttle-slider, #parts-panel, #ap-panel, #aux-pad, #fly-actions, #hud-cam {
+#hud button, #joy, #throttle-slider, #throttle-panel, #parts-panel, #ap-panel, #fly-actions, #hud-cam, #fail-tools, #fail-panel, #sys-tools {
   pointer-events: auto;
 }
 
-.topbar, .readout, #parts-panel, #ap-panel, #mouse-panel, #wx-panel, #hints, #throttle-panel, #fail-panel, #joy, #aux-pad, #adi, #fly-actions {
+.topbar, .readout, #parts-panel, #ap-panel, #wx-panel, #hints, #fail-panel, #adi {
   background: var(--hud);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 14px;
@@ -1045,14 +1042,55 @@ body.fly-mouse-off #view { cursor: default; }
 
 #fail-dock {
   position: absolute;
-  right: max(108px, calc(env(safe-area-inset-right) + 96px));
-  bottom: max(12px, env(safe-area-inset-bottom));
+  right: max(10px, env(safe-area-inset-right));
+  bottom: calc(var(--throttle-h) + max(18px, env(safe-area-inset-bottom) + 8px));
   display: flex;
-  flex-direction: row;
+  flex-direction: column;
   align-items: flex-end;
   gap: 8px;
   pointer-events: none;
-  z-index: 3;
+  z-index: 4;
+}
+
+#fail-tools {
+  display: flex;
+  gap: 6px;
+  pointer-events: auto;
+}
+
+#fail-toggle, #ap-toggle, #parts-toggle {
+  appearance: none;
+  border: 1px solid rgba(246, 241, 228, 0.18);
+  background: rgba(10, 16, 24, 0.82);
+  color: var(--cream);
+  border-radius: 14px;
+  min-height: 48px;
+  min-width: 64px;
+  padding: 10px 14px;
+  font-weight: 800;
+  font-size: 14px;
+  cursor: pointer;
+  touch-action: manipulation;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25);
+}
+
+#fail-toggle.on,
+#fail-toggle.alert {
+  background: rgba(230, 57, 70, 0.92);
+  border-color: transparent;
+  color: #fff;
+}
+
+#ap-toggle.on,
+#parts-toggle.on {
+  box-shadow: 0 0 0 2px rgba(255, 183, 3, 0.75);
+}
+
+#ap-toggle.live {
+  background: rgba(42, 157, 143, 0.9);
+  border-color: transparent;
+  color: #f6f1e4;
 }
 
 #fail-chat {
@@ -1129,8 +1167,8 @@ body.fly-mouse-off #view { cursor: default; }
 }
 
 .fail-mode {
-  min-height: 34px;
-  padding: 4px 6px;
+  min-height: 44px;
+  padding: 6px 6px;
   border-radius: 8px;
   border: 1px solid rgba(246, 241, 228, 0.18);
   background: rgba(255, 255, 255, 0.08);
@@ -1152,7 +1190,7 @@ body.fly-mouse-off #view { cursor: default; }
 }
 
 .fail-actions button {
-  min-height: 38px;
+  min-height: 44px;
   border: 0;
   border-radius: 10px;
   background: rgba(255, 183, 3, 0.9);
@@ -1180,11 +1218,34 @@ body.fly-mouse-off #view { cursor: default; }
   50% { filter: brightness(1.35); opacity: 0.72; }
 }
 
-#parts-panel {
+#sys-dock {
   position: absolute;
   top: max(10px, env(safe-area-inset-top));
   right: max(10px, env(safe-area-inset-right));
-  width: min(168px, 36vw);
+  bottom: calc(var(--throttle-h) + 20px + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  z-index: 5;
+  pointer-events: none;
+  max-width: min(220px, 70vw);
+  overflow: hidden;
+}
+
+#sys-tools {
+  display: flex;
+  gap: 6px;
+  pointer-events: auto;
+}
+
+#parts-panel {
+  position: relative;
+  top: auto;
+  right: auto;
+  flex: 0 1 auto;
+  min-height: 0;
+  width: min(200px, 70vw);
   max-height: min(42vh, 320px);
   overflow: auto;
   display: flex;
@@ -1193,7 +1254,7 @@ body.fly-mouse-off #view { cursor: default; }
   padding: 6px;
   touch-action: pan-y;
   -webkit-overflow-scrolling: touch;
-  z-index: 2;
+  pointer-events: auto;
 }
 
 #parts-panel button {
@@ -1205,7 +1266,7 @@ body.fly-mouse-off #view { cursor: default; }
   color: var(--cream);
   border-radius: 10px;
   padding: 10px 12px;
-  min-height: 44px;
+  min-height: 48px;
   text-align: left;
 }
 
@@ -1213,76 +1274,23 @@ body.fly-mouse-off #view { cursor: default; }
   background: rgba(42, 157, 143, 0.35);
 }
 
-#mouse-panel {
-  position: absolute;
-  top: max(112px, calc(env(safe-area-inset-top) + 104px));
-  left: max(10px, env(safe-area-inset-left));
-  width: min(188px, 46vw);
-  padding: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  pointer-events: auto;
-  z-index: 3;
-}
-
-.mouse-read {
-  margin: 0;
-  font-size: 12px;
-  color: rgba(246, 241, 228, 0.78);
-}
-
-.mouse-modes {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 6px;
-}
-
-.mouse-modes button,
-#mouse-invert {
-  min-height: 34px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--cream);
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.mouse-modes button.on,
-#mouse-invert.on {
-  background: rgba(239, 125, 0, 0.85);
-  color: #1b1204;
-}
-
-.mouse-sens {
-  display: grid;
-  gap: 4px;
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: rgba(246, 241, 228, 0.7);
-}
-
-#mouse-sens {
-  width: 100%;
-  accent-color: var(--amber);
-}
-
 #ap-panel {
-  position: absolute;
-  top: max(10px, env(safe-area-inset-top));
-  right: max(186px, calc(env(safe-area-inset-right) + 178px));
-  width: min(168px, 34vw);
+  position: relative;
+  top: auto;
+  right: auto;
+  bottom: auto;
+  flex: 0 1 auto;
+  min-height: 0;
+  width: min(200px, 70vw);
   padding: 6px;
   display: flex;
   flex-direction: column;
   gap: 4px;
   pointer-events: auto;
-  z-index: 2;
   max-height: min(42vh, 300px);
   overflow: auto;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
 }
 
 .ap-title {
@@ -1322,7 +1330,7 @@ body.fly-mouse-off #view { cursor: default; }
   background: rgba(255, 255, 255, 0.08);
   color: var(--cream);
   border-radius: 10px;
-  min-height: 40px;
+  min-height: 48px;
   font-weight: 700;
   pointer-events: auto;
   touch-action: manipulation;
@@ -1355,92 +1363,137 @@ body.fly-mouse-off #view { cursor: default; }
 
 #controls {
   position: absolute;
-  left: max(12px, env(safe-area-inset-left));
-  bottom: max(12px, env(safe-area-inset-bottom));
+  left: max(10px, env(safe-area-inset-left));
+  bottom: max(10px, env(safe-area-inset-bottom));
   display: flex;
-  align-items: flex-end;
-  gap: 10px;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: var(--cluster-w);
   pointer-events: none;
   z-index: 3;
 }
 
 #joy {
-  width: 148px;
-  height: 148px;
+  width: var(--stick-size);
+  height: var(--stick-size);
   border-radius: 50%;
   position: relative;
   touch-action: none;
   flex: none;
   background:
-    linear-gradient(rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.28)) center/2px 46% no-repeat,
-    linear-gradient(rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.28)) center/46% 2px no-repeat,
-    radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.08), rgba(8, 14, 22, 0.55) 68%);
+    linear-gradient(rgba(255, 255, 255, 0.35), rgba(255, 255, 255, 0.35)) center/2px 42% no-repeat,
+    linear-gradient(rgba(255, 255, 255, 0.35), rgba(255, 255, 255, 0.35)) center/42% 2px no-repeat,
+    radial-gradient(circle at 50% 42%, rgba(255, 255, 255, 0.16), rgba(8, 14, 22, 0.28) 46%, rgba(8, 14, 22, 0.55) 70%);
+  border: 2px solid rgba(255, 255, 255, 0.28);
+  box-shadow: inset 0 0 0 10px rgba(8, 14, 22, 0.18), 0 10px 24px rgba(0, 0, 0, 0.28);
+}
+
+#joy.dragging {
+  border-color: rgba(255, 183, 3, 0.85);
 }
 
 #joy-knob {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 64px;
-  height: 64px;
-  margin: -32px 0 0 -32px;
+  width: 68px;
+  height: 68px;
+  margin: -34px 0 0 -34px;
   border-radius: 50%;
-  background: var(--amber);
-  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
+  background:
+    radial-gradient(circle at 35% 32%, #ffe08a, var(--amber) 46%, #c45e00);
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.4), inset 0 -4px 8px rgba(0, 0, 0, 0.25);
+  transition: transform 0.12s ease-out;
+  pointer-events: none;
 }
 
+#joy.dragging #joy-knob { transition: none; }
+
 #aux-pad {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: 1fr 1.35fr 1fr;
   gap: 8px;
-  padding: 8px;
+  width: var(--aux-w);
+  padding: 0;
+  background: none;
+  border: 0;
   pointer-events: none;
 }
 
 #aux-pad button, #fly-actions button, #mute-btn {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(8, 14, 22, 0.78);
   color: var(--cream);
-  border-radius: 12px;
-  min-height: 52px;
-  min-width: 108px;
-  padding: 8px 12px;
-  font-weight: 700;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+  min-height: 48px;
+  min-width: 0;
+  padding: 8px 10px;
+  font-weight: 800;
+  font-size: 15px;
   pointer-events: auto;
   touch-action: manipulation;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.28);
 }
 
 #aux-pad button {
   touch-action: none;
+  min-width: 48px;
+  min-height: 52px;
+  padding: 8px 4px;
+  font-size: 20px;
+}
+
+#aux-pad button[data-hold="brake"] {
+  background: rgba(180, 40, 48, 0.88);
+  letter-spacing: 0.02em;
+  font-size: 14px;
 }
 
 #aux-pad button.held, #fly-actions button.held, #fly-actions button.armed,
 #parts-panel button:active, #aux-pad button:active, #fly-actions button:active {
-  background: rgba(239, 125, 0, 0.7);
+  background: var(--amber);
   color: #1b1204;
+  border-color: transparent;
 }
 
-/* Center action dock — clear of stick (left) and throttle (right). */
+#fly-actions button:active, #aux-pad button:active {
+  transform: scale(0.96);
+}
+
+/* Actions sit in the gap between the stick and the throttle. */
 #fly-actions {
   position: absolute;
-  left: 50%;
-  bottom: max(12px, env(safe-area-inset-bottom));
-  transform: translateX(-50%);
+  left: calc(var(--cluster-w) + max(18px, env(safe-area-inset-left) + 8px));
+  right: calc(96px + max(10px, env(safe-area-inset-right)));
+  bottom: max(10px, env(safe-area-inset-bottom));
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 6px;
-  padding: 8px;
-  max-width: min(420px, calc(100vw - 220px));
+  align-items: flex-end;
+  align-content: flex-end;
+  gap: 8px;
+  padding: 0;
   z-index: 4;
   pointer-events: auto;
+  background: none;
+  border: 0;
 }
 
 #fly-actions button {
-  min-width: 0;
-  min-height: 44px;
-  padding: 8px 10px;
-  font-size: 13px;
-  flex: 1 1 auto;
+  min-width: 72px;
+  min-height: 48px;
+  padding: 10px 12px;
+  font-size: 14px;
+  flex: 0 0 auto;
+}
+
+#fly-more-sheet {
+  display: contents;
+}
+
+#fly-more {
+  background: rgba(255, 255, 255, 0.16);
 }
 
 #fly-actions button[data-fly="jump"] {
@@ -1460,35 +1513,42 @@ body.fly-mouse-off #view { cursor: default; }
   background: rgba(255, 183, 3, 0.28);
 }
 
+#fly-actions button.armed,
+#fly-actions button.held,
+#fly-actions.more-open #fly-more {
+  background: var(--amber);
+  color: #1b1204;
+  border-color: transparent;
+}
+
 #throttle-panel {
   position: absolute;
-  right: max(12px, env(safe-area-inset-right));
-  bottom: max(12px, env(safe-area-inset-bottom));
-  width: 84px;
-  padding: 10px 10px 8px;
+  right: max(10px, env(safe-area-inset-right));
+  bottom: max(10px, env(safe-area-inset-bottom));
+  width: 76px;
+  padding: 0 6px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  pointer-events: none;
+  pointer-events: auto;
+  touch-action: none;
   z-index: 3;
 }
 
-#throttle-panel span {
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: rgba(246, 241, 228, 0.8);
-}
-
 #throttle-slider {
-  width: 58px;
-  height: 188px;
+  width: 64px;
+  height: var(--throttle-h);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.12);
+  background: rgba(8, 14, 22, 0.55);
+  border: 2px solid rgba(255, 255, 255, 0.2);
   position: relative;
   touch-action: none;
   overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+
+#throttle-slider.dragging {
+  border-color: rgba(255, 183, 3, 0.85);
 }
 
 #throttle-fill {
@@ -1497,27 +1557,43 @@ body.fly-mouse-off #view { cursor: default; }
   right: 0;
   bottom: 0;
   height: 0%;
-  background: linear-gradient(0deg, #2a9d8f, #ffb703 70%, #e63946);
+  background: linear-gradient(0deg, #1d6f66, #ffb703 68%, #e63946);
+  pointer-events: none;
 }
 
 #throttle-knob {
   position: absolute;
   left: 50%;
-  width: 46px;
-  height: 32px;
-  margin-left: -23px;
+  width: 52px;
+  height: 44px;
+  margin-left: -26px;
   bottom: 0;
-  border-radius: 10px;
-  background: var(--cream);
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.35);
+  border-radius: 14px;
+  background: linear-gradient(180deg, #fffaf0, #e6dcc6);
+  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
 }
+
+#throttle-knob::before,
+#throttle-knob::after {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  height: 2px;
+  border-radius: 2px;
+  background: rgba(16, 32, 51, 0.35);
+}
+
+#throttle-knob::before { top: 16px; }
+#throttle-knob::after { top: 24px; }
 
 #hints {
   position: absolute;
   left: 50%;
-  bottom: max(68px, calc(env(safe-area-inset-bottom) + 56px));
+  bottom: calc(var(--throttle-h) * 0.42 + max(16px, env(safe-area-inset-bottom)));
   transform: translateX(-50%);
-  width: min(460px, 36vw);
+  width: min(460px, 34vw);
   padding: 8px 12px;
   font-size: 12px;
   line-height: 1.45;
@@ -2213,33 +2289,56 @@ body.fly-mouse-off #view { cursor: default; }
 }
 
 @media (max-width: 900px) {
+  :root {
+    --stick-size: 132px;
+    --throttle-h: 158px;
+  }
   #hints { display: none; }
   #adi { display: none; }
   .readout { padding: 3px 6px; }
   .readout b { font-size: 15px; }
   #fly-actions {
-    max-width: calc(100vw - 24px);
     bottom: max(10px, env(safe-area-inset-bottom));
-    gap: 5px;
-    padding: 6px;
+    gap: 6px;
   }
   #fly-actions button {
-    min-height: 42px;
-    font-size: 12px;
-    padding: 7px 8px;
+    min-width: 64px;
+    min-height: 48px;
+    font-size: 14px;
+    padding: 8px 10px;
   }
-  #parts-panel {
-    top: max(8px, env(safe-area-inset-top));
-    right: max(8px, env(safe-area-inset-right));
-    width: min(140px, 34vw);
-    max-height: 34vh;
+  #fly-more-sheet {
+    display: none;
+    position: fixed;
+    left: calc(var(--cluster-w) + max(16px, env(safe-area-inset-left)));
+    right: max(80px, env(safe-area-inset-right));
+    bottom: calc(var(--throttle-h) + 70px + env(safe-area-inset-bottom));
+    top: max(58px, calc(env(safe-area-inset-top) + 50px));
+    transform: none;
+    flex-direction: column;
+    gap: 6px;
+    width: auto;
+    max-height: min(420px, 52vh);
+    overflow: auto;
+    padding: 8px;
+    border-radius: 16px;
+    background: rgba(8, 14, 22, 0.94);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    box-shadow: 0 14px 32px rgba(0, 0, 0, 0.45);
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
   }
-  /* Keep AP up top — never over the throttle. */
-  #ap-panel {
-    top: max(8px, env(safe-area-inset-top));
-    bottom: auto;
-    right: max(156px, calc(env(safe-area-inset-right) + 148px));
-    width: min(140px, 32vw);
+  #fly-actions.more-open #fly-more-sheet {
+    display: flex;
+  }
+  #fly-more-sheet button {
+    width: 100%;
+    min-height: 48px;
+  }
+  #joy-knob { width: 58px; height: 58px; margin: -29px 0 0 -29px; }
+  #sys-dock { top: max(46px, calc(env(safe-area-inset-top) + 40px)); }
+  #parts-panel, #ap-panel {
+    width: min(188px, 70vw);
     max-height: 34vh;
   }
   #hangar-wx-grid { grid-template-columns: 1fr 1fr; }
@@ -2250,34 +2349,24 @@ body.fly-mouse-off #view { cursor: default; }
     top: max(48px, calc(env(safe-area-inset-top) + 36px));
     max-width: calc(100vw - 170px);
   }
-  #mouse-panel {
-    top: auto;
-    bottom: max(118px, calc(env(safe-area-inset-bottom) + 108px));
-    left: max(10px, env(safe-area-inset-left));
-    width: min(168px, 46vw);
-  }
   .topbar { gap: 8px; padding: 6px 10px; font-size: 12px; }
-  #joy { width: 124px; height: 124px; }
-  #joy-knob { width: 56px; height: 56px; margin: -28px 0 0 -28px; }
-  #aux-pad button { min-width: 92px; min-height: 48px; }
-  #throttle-slider { height: 148px; width: 52px; }
-  /* Lift stick/throttle so they don't fight the action dock. */
-  #controls {
-    bottom: max(64px, calc(env(safe-area-inset-bottom) + 52px));
-  }
-  #throttle-panel {
-    bottom: max(64px, calc(env(safe-area-inset-bottom) + 52px));
-  }
-  #fail-dock {
-    right: max(96px, calc(env(safe-area-inset-right) + 84px));
-    bottom: max(64px, calc(env(safe-area-inset-bottom) + 52px));
-  }
   #fail-panel {
-    width: min(148px, 40vw);
+    width: min(168px, 46vw);
     padding: 8px;
   }
-  .fail-mode { min-height: 30px; font-size: 11px; }
-  .fail-actions button { min-height: 34px; font-size: 12px; }
+  #hud kbd { display: none; }
+}
+
+@media (max-width: 420px) {
+  :root { --aux-w: 156px; }
+  #throttle-panel { width: 64px; padding: 0; }
+  #throttle-slider { width: 56px; }
+  #fly-actions { right: calc(78px + max(8px, env(safe-area-inset-right))); }
+  #fly-actions button { min-width: 0; padding: 8px 10px; }
+}
+
+@media (min-width: 901px) {
+  #fly-more { display: none; }
 }
 
 /* Phones / iPads: Chat sits beside Failures (left of the panel). */
@@ -2305,15 +2394,21 @@ body.fly-mouse-off #view { cursor: default; }
 }
 
 @media (max-height: 720px) {
+  :root {
+    --stick-size: 116px;
+    --throttle-h: 128px;
+  }
   #adi { display: none; }
-  #joy { width: 112px; height: 112px; }
-  #joy-knob { width: 48px; height: 48px; margin: -24px 0 0 -24px; }
-  #throttle-slider { height: 132px; }
-  #aux-pad button { min-height: 44px; }
+  #joy-knob { width: 50px; height: 50px; margin: -25px 0 0 -25px; }
+  #aux-pad button { min-height: 44px; font-size: 16px; }
+  #fly-more-sheet { top: 46px; }
+  #parts-panel, #ap-panel { max-height: 28vh; }
 }
 
 @media (pointer: coarse) {
   #fly-btn { min-height: 56px; font-size: 20px; }
   .plane-btn { min-height: 68px; }
   #parts-panel button { min-height: 48px; }
+  #hud kbd { display: none; }
+  .ap-btn, .ap-trim button { min-height: 44px; }
 }

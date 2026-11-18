@@ -7,10 +7,152 @@ import {
   slotOrigin,
   towerForSlot,
   airportLabel,
-} from "./airportSlots.js"
+} from "./airportSlots.js?v=196"
 
 export const PAD = { ...PAD_LOCAL }
 export const RUNWAY = { ...RUNWAY_LOCAL }
+
+const approachLampGeo = new THREE.SphereGeometry(0.42, 8, 6)
+const approachPoleGeo = new THREE.CylinderGeometry(0.07, 0.09, 1.25, 5)
+const approachPoleMat = new THREE.MeshStandardMaterial({ color: 0x1b2026, roughness: 0.75 })
+const approachLampMat = new THREE.MeshStandardMaterial({
+  color: 0xfff4cc,
+  emissive: 0xffcc66,
+  emissiveIntensity: 1.8,
+  roughness: 0.35,
+})
+const lastLampMat = new THREE.MeshStandardMaterial({
+  color: 0xc8ffd4,
+  emissive: 0x3ee07a,
+  emissiveIntensity: 2.6,
+  roughness: 0.3,
+})
+
+let approachGlowMap = null
+let lastGlowMap = null
+function glowMap(inner, mid) {
+  const canvas = document.createElement("canvas")
+  canvas.width = 64
+  canvas.height = 64
+  const ctx = canvas.getContext("2d")
+  const g = ctx.createRadialGradient(32, 32, 1, 32, 32, 30)
+  g.addColorStop(0, inner)
+  g.addColorStop(0.4, mid)
+  g.addColorStop(1, "rgba(0,0,0,0)")
+  ctx.fillStyle = g
+  ctx.fillRect(0, 0, 64, 64)
+  const tex = new THREE.CanvasTexture(canvas)
+  tex.colorSpace = THREE.SRGBColorSpace
+  return tex
+}
+function approachGlowTexture() {
+  if (!approachGlowMap) approachGlowMap = glowMap("rgba(255,250,230,1)", "rgba(255,196,80,0.7)")
+  return approachGlowMap
+}
+function lastGlowTexture() {
+  if (!lastGlowMap) lastGlowMap = glowMap("rgba(230,255,236,1)", "rgba(60,220,110,0.75)")
+  return lastGlowMap
+}
+
+const landingRows = []
+
+/** Lead-in lights on the landing centerline. The last lamp is 10 ft onto the runway.
+ *  Order is the landing direction: far approach first, threshold last. */
+function addLandingLights(parent, ox, oz) {
+  const inset = RUNWAY_LOCAL.lightInset
+  const zs = []
+  for (let d = RUNWAY_LOCAL.lightLead; d >= 80; d -= 80) zs.push(oz - d)
+  const dummy = new THREE.Object3D()
+  const poles = new THREE.InstancedMesh(approachPoleGeo, approachPoleMat, zs.length)
+  const row = []
+  zs.forEach((z, i) => {
+    dummy.position.set(ox, 0.62, z)
+    dummy.rotation.set(0, 0, 0)
+    dummy.scale.set(1, 1, 1)
+    dummy.updateMatrix()
+    poles.setMatrixAt(i, dummy.matrix)
+    const mat = approachLampMat.clone()
+    mat.emissiveIntensity = 0.35
+    const lamp = new THREE.Mesh(approachLampGeo, mat)
+    lamp.position.set(ox, 1.4, z)
+    lamp.name = "landing-lights"
+    const glowMat = new THREE.SpriteMaterial({
+      map: approachGlowTexture(),
+      transparent: true,
+      depthWrite: false,
+      opacity: 0.22,
+    })
+    const glow = new THREE.Sprite(glowMat)
+    glow.position.set(ox, 1.4, z)
+    glow.scale.set(5.5, 5.5, 1)
+    glow.name = "landing-lights"
+    parent.add(lamp, glow)
+    row.push({ mat, glow: glowMat, dim: 0.35, hot: 3.6, glowDim: 0.2, glowHot: 1 })
+  })
+  poles.instanceMatrix.needsUpdate = true
+  poles.name = "landing-lights"
+  parent.add(poles)
+
+  const lastZ = oz + inset
+  const lastPole = new THREE.Mesh(approachPoleGeo, approachPoleMat)
+  lastPole.position.set(ox, 0.62, lastZ)
+  lastPole.name = "landing-lights"
+  const lastMat = lastLampMat.clone()
+  lastMat.emissiveIntensity = 0.7
+  const lastLamp = new THREE.Mesh(approachLampGeo, lastMat)
+  lastLamp.position.set(ox, 1.5, lastZ)
+  lastLamp.scale.setScalar(1.4)
+  lastLamp.name = "landing-last-light"
+  const lastGlowMat = new THREE.SpriteMaterial({
+    map: lastGlowTexture(),
+    transparent: true,
+    depthWrite: false,
+    opacity: 0.35,
+  })
+  const lastGlow = new THREE.Sprite(lastGlowMat)
+  lastGlow.position.set(ox, 1.5, lastZ)
+  lastGlow.scale.set(8, 8, 1)
+  lastGlow.name = "landing-last-light"
+  parent.add(lastPole, lastLamp, lastGlow)
+  row.push({ mat: lastMat, glow: lastGlowMat, dim: 0.7, hot: 4.4, glowDim: 0.32, glowHot: 1 })
+  landingRows.push({ root: parent, row })
+
+  // Touchdown line: 10 ft past the last light. Altitude on the approach is 0 here.
+  const lineZ = oz + RUNWAY_LOCAL.lightInset + RUNWAY_LOCAL.touchClear
+  const line = new THREE.Mesh(
+    new THREE.PlaneGeometry(40, 1.4),
+    new THREE.MeshStandardMaterial({ color: 0xfff4c2, emissive: 0xffd56a, emissiveIntensity: 0.55, roughness: 0.45 })
+  )
+  line.rotation.x = -Math.PI / 2
+  line.position.set(ox, 0.36, lineZ)
+  line.name = "landing-line"
+  parent.add(line)
+}
+
+/** Chase flash runs from the outer light toward the runway, then pauses and repeats. */
+export function updateLandingLights(timeMs) {
+  const time = timeMs * 0.001
+  for (let s = landingRows.length - 1; s >= 0; s -= 1) {
+    const seq = landingRows[s]
+    if (!seq.root.isScene && !seq.root.parent) {
+      landingRows.splice(s, 1)
+      continue
+    }
+    const n = seq.row.length
+    const step = 0.09
+    const cycle = (n + 5) * step
+    const head = (time % cycle) / step
+    for (let i = 0; i < n; i += 1) {
+      const age = head - i
+      let k = 0
+      if (age >= 0 && age < 0.45) k = 1
+      else if (age >= 0.45 && age < 1.2) k = 0.42
+      const light = seq.row[i]
+      light.mat.emissiveIntensity = light.dim + (light.hot - light.dim) * k
+      light.glow.opacity = light.glowDim + (light.glowHot - light.glowDim) * k
+    }
+  }
+}
 /** Soft world bound — flat Earth playground spanning all continents. */
 export const WORLD_RADIUS = 92000
 export { slotOrigin, towerForSlot, airportLabel }
@@ -500,6 +642,7 @@ function addAirport(scene, obstacles, ox, oz, label) {
   strip.position.set(ox, 0.18, oz + 700)
   strip.receiveShadow = true
   scene.add(strip)
+  addLandingLights(scene, ox, oz)
   const apron = new THREE.Mesh(
     new THREE.PlaneGeometry(220, 280),
     groundMaterial({ color: 0x8e959e, roughness: 0.94 })
@@ -735,6 +878,7 @@ export function createWorld(scene) {
     runway.position.set(ox, 0.22, oz + 1000)
     runway.receiveShadow = true
     group.add(runway)
+    addLandingLights(group, ox, oz)
 
     const paint = groundMaterial({ color: 0xeeeae0, roughness: 1, metalness: 0 })
     paint.polygonOffsetFactor = -3
@@ -1215,6 +1359,11 @@ export function createWorld(scene) {
     RUNWAY.z0 = at.z + RUNWAY_LOCAL.z0
     RUNWAY.z1 = at.z + RUNWAY_LOCAL.z1
     RUNWAY.halfWidth = RUNWAY_LOCAL.halfWidth
+    RUNWAY.landHdg = RUNWAY_LOCAL.landHdg
+    RUNWAY.lightInset = RUNWAY_LOCAL.lightInset
+    RUNWAY.touchClear = RUNWAY_LOCAL.touchClear
+    RUNWAY.lightLead = RUNWAY_LOCAL.lightLead
+    RUNWAY.gateAlt = RUNWAY_LOCAL.gateAlt
     api.towerPos = tower
     api.localSlot = key
     api.localOrigin = at

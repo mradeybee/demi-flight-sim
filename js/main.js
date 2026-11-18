@@ -3,11 +3,11 @@ import { PLANES, partButtons, partSummary } from "./catalog.js"
 import { createAircraft, disposeCraft, updateAircraft } from "./aircraft.js"
 import { CARS, createCar, disposeCar, updateCar, isCar } from "./vehicles.js"
 import { ensureModel, isModelCached, preloadAircraftModels, warmAircraftModels } from "./models.js"
-import { PAD, RUNWAY, createWorld, WORLD_RADIUS, CONTINENTS, WORLD_AIRPORTS, START_BOUNDS, describePlace, prettyPlace, spawnBeside } from "./world.js"
+import { PAD, RUNWAY, createWorld, updateLandingLights, WORLD_RADIUS, CONTINENTS, WORLD_AIRPORTS, START_BOUNDS, describePlace, prettyPlace, spawnBeside } from "./world.js?v=198"
 import { COCKPIT_BUTTONS } from "./cockpitButtons.js"
 import { createWeatherController } from "./weather.js"
 import { createNet } from "./net.js"
-import { sanitizeName, airportLabel } from "./airportSlots.js"
+import { sanitizeName, airportLabel } from "./airportSlots.js?v=196"
 import { createCrashFx } from "./crashFx.js"
 
 const FLEET = [...PLANES, ...CARS]
@@ -102,30 +102,8 @@ let weather = null
 const keys = new Set()
 const held = { pitch: 0, roll: 0, yaw: 0, throttle: 0, brake: 0, run: 0 }
 const stick = { pitch: 0, roll: 0, yaw: 0 }
-/** Mouse / trackpad aim stick — screen offset from center steers the plane. */
-const mouseStick = { pitch: 0, roll: 0, live: false }
-let mouseFlyHintShown = false
-let lastAimX = null
-let lastAimY = null
 let planeQuery = ""
 let swapQuery = ""
-const mousePrefs = { mode: "aim", sens: 1, invert: false }
-
-function loadMousePrefs() {
-  try {
-    const raw = JSON.parse(localStorage.getItem("tfs-mouse") || "")
-    if (raw?.mode === "aim" || raw?.mode === "drag" || raw?.mode === "off") mousePrefs.mode = raw.mode
-    const sens = Number(raw?.sens)
-    if (Number.isFinite(sens)) mousePrefs.sens = THREE.MathUtils.clamp(sens, 0.4, 2.2)
-    mousePrefs.invert = !!raw?.invert
-  } catch { /* ignore */ }
-}
-
-function saveMousePrefs() {
-  try { localStorage.setItem("tfs-mouse", JSON.stringify(mousePrefs)) } catch { /* ignore */ }
-}
-
-loadMousePrefs()
 const velocity = new THREE.Vector3()
 const forward = new THREE.Vector3()
 const up = new THREE.Vector3()
@@ -170,11 +148,17 @@ const ap = {
   targetHdg: 0,
   targetAlt: 100,
   targetSpd: 55,
+  landArm: 0,
+  rolloutUntil: 0,
 }
 const LAND_FIX_DIST = 2800
 const LAND_NAV_ALT = 280
 const LAND_ALIGN_ALT = 140
 const LAND_GLIDE_TAN = Math.tan((3.2 * Math.PI) / 180)
+// Line up on the extended centerline while still at least 200 ft from the runway,
+// then fly that heading straight. The descent itself is a shallow straight line.
+const LAND_LINEUP_MIN = 200 * 0.3048
+const LAND_STRAIGHT_TAN = Math.tan((2.5 * Math.PI) / 180)
 const SYS_BUTTONS = COCKPIT_BUTTONS
 const systems = Object.fromEntries(SYS_BUTTONS.map((btn) => [btn.id, !!btn.start]))
 let dragging = false
@@ -187,6 +171,10 @@ let toldRotate = false
 let distance = 0
 let recovering = false
 let outside = false
+let flyMoreOpen = false
+let failOpen = false
+let apOpen = false
+let partsOpen = false
 let chuteOpen = false
 let pilot = null
 const pilotVel = new THREE.Vector3()
@@ -1097,6 +1085,13 @@ let jTapAt = 0
 let jTapArmed = false
 let takeoffBoost = 0
 let rotateWait = 0
+// Attitude the pilot last set. A tap banks or pitches once, then this holds
+// until the next pitch or roll input. Wings no longer level themselves on release.
+let holdBank = 0
+let holdPitch = 0
+let rollLatch = 0
+let pitchLatch = 0
+let pitchTouched = false
 let warnTimer = 0
 let toastTimer = 0
 let stallTimer = 0
@@ -1249,7 +1244,7 @@ function practiceFailure() {
     return
   }
   if (failMode === "off" && !cheats.admin) {
-    toast("Failures are Off — tap On next to the throttle.")
+    toast("Failures are Off — open Fails, then tap On.")
     return
   }
   const kind = pickRandomFailure()
@@ -1320,10 +1315,27 @@ function setFailMode(next) {
 }
 
 function refreshFailPanel() {
+  const flying = mode === "fly"
+  if (failures.fire && !refreshFailPanel.sawFire) failOpen = true
+  refreshFailPanel.sawFire = !!failures.fire
+  const dock = document.getElementById("fail-dock")
   const panel = document.getElementById("fail-panel")
-  if (panel) panel.hidden = mode !== "fly"
+  const toggle = document.getElementById("fail-toggle")
+  if (dock) dock.hidden = !flying
+  if (panel) panel.hidden = !flying || !failOpen
+  if (toggle) {
+    toggle.setAttribute("aria-expanded", failOpen ? "true" : "false")
+    toggle.classList.toggle("on", failOpen)
+    toggle.classList.toggle("alert", !!failures.fire)
+    toggle.textContent = failures.fire ? "Fire" : "Fails"
+  }
   const extinguish = document.getElementById("fail-extinguish")
-  if (extinguish) extinguish.hidden = !(mode === "fly" && failures.fire)
+  if (extinguish) extinguish.hidden = !(flying && failures.fire)
+}
+
+function setFailOpen(open) {
+  failOpen = !!open
+  refreshFailPanel()
 }
 
 function extinguishFire() {
@@ -1532,6 +1544,7 @@ const chatBadge = document.getElementById("chat-badge")
 const chatEmojiBtn = document.getElementById("chat-emoji")
 const chatEmojiPanel = document.getElementById("chat-emoji-panel")
 const chatPop = document.getElementById("chat-pop")
+const CHAT_ENABLED = false
 const MAX_CHAT_LINES = 48
 const CHAT_MAX_LEN = 140
 const MAX_CHAT_POPS = 4
@@ -1571,7 +1584,25 @@ function syncChatButton(btn) {
   }
 }
 
+function hideChatControls() {
+  if (chatRoot) {
+    chatRoot.hidden = true
+    chatRoot.classList.remove("open")
+  }
+  if (chatPanel) chatPanel.hidden = true
+  if (chatBackdrop) chatBackdrop.hidden = true
+  if (chatPop) chatPop.hidden = true
+  const flyChat = document.getElementById("fly-chat")
+  const failChat = document.getElementById("fail-chat")
+  if (flyChat) flyChat.hidden = true
+  if (failChat) failChat.hidden = true
+}
+
 function syncChatChrome() {
+  if (!CHAT_ENABLED) {
+    hideChatControls()
+    return
+  }
   if (!chatRoot) return
   chatRoot.classList.toggle("in-flight", mode === "fly")
   const flyChat = document.getElementById("fly-chat")
@@ -1619,6 +1650,10 @@ function insertChatEmoji(emoji) {
 }
 
 function setChatOpen(open) {
+  if (!CHAT_ENABLED) {
+    hideChatControls()
+    return
+  }
   if (!chatRoot || !chatPanel) return
   chatRoot.classList.toggle("open", open)
   chatPanel.hidden = !open
@@ -1686,7 +1721,7 @@ function showChatPopup({ name, text, you = false }) {
 }
 
 function pushChatMessage(msg) {
-  if (!msg?.text) return
+  if (!CHAT_ENABLED || !msg?.text) return
   const key = chatMessageKey(msg)
   if (recentChatKeys.has(key)) return
   recentChatKeys.add(key)
@@ -1705,6 +1740,7 @@ function pushChatMessage(msg) {
 }
 
 function sendChatFromInput() {
+  if (!CHAT_ENABLED) return
   const raw = chatInput?.value || ""
   const text = raw.replace(/\s+/g, " ").trim()
   if (!text) return
@@ -1722,12 +1758,16 @@ function sendChatFromInput() {
 }
 
 function showChatUi() {
+  if (!CHAT_ENABLED) {
+    hideChatControls()
+    return
+  }
   if (chatRoot) chatRoot.hidden = false
   syncChatChrome()
 }
 
 function bindChatUi() {
-  if (!chatRoot) return
+  if (!CHAT_ENABLED || !chatRoot) return
   chatToggle?.addEventListener("click", () => {
     setChatOpen(true)
   })
@@ -1887,6 +1927,7 @@ function partOn(craft, group) {
 
 function renderPartButtons() {
   const panel = document.getElementById("parts-panel")
+  if (!panel) return
   panel.innerHTML = ""
   for (const item of partButtons(player.def)) {
     const button = document.createElement("button")
@@ -1903,6 +1944,7 @@ function renderPartButtons() {
 
 function refreshPartButtons() {
   const panel = document.getElementById("parts-panel")
+  if (!panel) return
   for (const button of panel.children) {
     const group = button.dataset.group
     button.querySelector("b").textContent = partState(player, group)
@@ -1915,15 +1957,14 @@ function hintLine(def) {
     ? [
         "W / Up gas",
         "S / Down reverse",
-        "Mouse or A D steer",
+        "A D or arrows steer",
         "Slide throttle",
         "Space brake",
         "Shift faster",
         "J J get out",
       ]
     : [
-        "Mouse steers (move to bank / pitch)",
-        "Stick or arrows also steer",
+        "Stick or arrows bank and pitch",
         "Slide throttle",
         "B autopilot",
         "H home land",
@@ -1942,88 +1983,6 @@ function hintLine(def) {
     "Esc hangar"
   )
   return bits.join("  ·  ")
-}
-
-function mouseFlyAllowed() {
-  if (mode !== "fly" || !player || outside) return false
-  if (typingInField()) return false
-  if (chatOpen()) return false
-  // Orbit / cockpit look use drag for the camera — don't steal that.
-  if (isOrbitCam()) return false
-  if (isCockpitCam() && dragging) return false
-  return true
-}
-
-function curveMouseAxis(value, dead = 0.1) {
-  const a = Math.abs(value)
-  if (a <= dead) return 0
-  const t = (a - dead) / (1 - dead)
-  return Math.sign(value) * Math.pow(THREE.MathUtils.clamp(t, 0, 1), 1.25)
-}
-
-function noteMouseSteer() {
-  if (mouseFlyHintShown) return
-  if (Math.abs(mouseStick.pitch) < 0.2 && Math.abs(mouseStick.roll) < 0.2) return
-  mouseFlyHintShown = true
-  const how = mousePrefs.mode === "drag" ? "Drag the mouse to steer" : "Mouse steers — move it to go anywhere"
-  toast(playerIsCar() ? "Mouse steers the car — gas with W / Up or the throttle" : how)
-}
-
-function updateMouseStick(clientX, clientY, pointerType = "mouse") {
-  if (mousePrefs.mode === "off" || !mouseFlyAllowed() || pointerType === "touch") {
-    clearMouseStick()
-    lastAimX = clientX
-    lastAimY = clientY
-    return
-  }
-  // On-screen joystick wins while it's being held.
-  if (Math.abs(held.pitch) > 0.04 || Math.abs(held.roll) > 0.04) {
-    clearMouseStick()
-    lastAimX = clientX
-    lastAimY = clientY
-    return
-  }
-  if (mousePrefs.mode === "drag") {
-    if (lastAimX == null || lastAimY == null) {
-      lastAimX = clientX
-      lastAimY = clientY
-      return
-    }
-    const dx = clientX - lastAimX
-    const dy = clientY - lastAimY
-    lastAimX = clientX
-    lastAimY = clientY
-    const sens = mousePrefs.sens
-    mouseStick.roll = THREE.MathUtils.clamp(mouseStick.roll + dx * 0.01 * sens, -1, 1)
-    if (!playerIsCar()) {
-      const dir = mousePrefs.invert ? 1 : -1
-      mouseStick.pitch = THREE.MathUtils.clamp(mouseStick.pitch + dy * 0.01 * sens * dir, -1, 1)
-    }
-    mouseStick.live = true
-    noteMouseSteer()
-    return
-  }
-  lastAimX = clientX
-  lastAimY = clientY
-  const rect = canvas.getBoundingClientRect()
-  if (rect.width < 8 || rect.height < 8) return
-  const sens = mousePrefs.sens
-  const nx = (((clientX - rect.left) / rect.width) * 2 - 1) * sens
-  let ny = (((clientY - rect.top) / rect.height) * 2 - 1) * sens
-  if (mousePrefs.invert) ny = -ny
-  // Mouse right → bank / steer right; mouse up → pitch up (planes) or ignored for cars.
-  mouseStick.roll = THREE.MathUtils.clamp(curveMouseAxis(nx), -1, 1)
-  mouseStick.pitch = playerIsCar() ? 0 : THREE.MathUtils.clamp(curveMouseAxis(-ny), -1, 1)
-  mouseStick.live = true
-  noteMouseSteer()
-}
-
-function decayMouseDrag(dt) {
-  if (mousePrefs.mode !== "drag" || !mouseStick.live) return
-  const keep = Math.exp(-dt * 2.4)
-  mouseStick.pitch *= keep
-  mouseStick.roll *= keep
-  if (Math.abs(mouseStick.pitch) < 0.02 && Math.abs(mouseStick.roll) < 0.02) clearMouseStick()
 }
 
 function planeMatches(def, query) {
@@ -2052,38 +2011,6 @@ function applyPlaneFilter() {
   const empty = document.getElementById("plane-empty")
   const any = [...list.querySelectorAll(".plane-btn")].some((button) => !button.hidden)
   if (empty) empty.hidden = any || !query
-}
-
-function refreshMousePanel() {
-  const panel = document.getElementById("mouse-panel")
-  const read = document.getElementById("mouse-read")
-  const sens = document.getElementById("mouse-sens")
-  const invert = document.getElementById("mouse-invert")
-  for (const button of document.querySelectorAll("[data-mouse]")) {
-    button.classList.toggle("on", button.dataset.mouse === mousePrefs.mode)
-  }
-  if (sens && document.activeElement !== sens) sens.value = String(mousePrefs.sens)
-  if (invert) {
-    invert.classList.toggle("on", mousePrefs.invert)
-    invert.textContent = mousePrefs.invert ? "Invert on" : "Invert off"
-  }
-  if (read) {
-    read.textContent = mousePrefs.mode === "drag"
-      ? "Drag to steer"
-      : mousePrefs.mode === "off"
-        ? "Keys and stick only"
-        : "Cursor steers"
-  }
-  document.body.classList.toggle("fly-mouse-aim", mode === "fly" && mousePrefs.mode === "aim")
-  document.body.classList.toggle("fly-mouse-drag", mode === "fly" && mousePrefs.mode === "drag")
-  document.body.classList.toggle("fly-mouse-off", mode === "fly" && mousePrefs.mode === "off")
-  document.getElementById("fly-mouse")?.classList.toggle("on", panel && !panel.hidden)
-}
-
-function clearMouseStick() {
-  mouseStick.live = false
-  mouseStick.pitch = 0
-  mouseStick.roll = 0
 }
 
 function ensurePilot() {
@@ -2793,6 +2720,8 @@ function clearHomeLand() {
   ap.landHdg = 0
   ap.landFix = null
   ap.landThresh = null
+  ap.inbound = false
+  ap.rolloutUntil = 0
 }
 
 function disengageAp(reason) {
@@ -2871,20 +2800,36 @@ function homeLandPlanForHdg(landHdg) {
   }
 }
 
-/** Prefer the approach end that keeps us from having to overfly the strip first. */
+function designatedLandPlan() {
+  return homeLandPlanForHdg(RUNWAY.landHdg || 0)
+}
+
+/** Along-track of the landing line: 10 ft past the last guide light. Altitude is 0 here. */
+function minTouchAlong() {
+  return -((RUNWAY.lightInset || 0) + (RUNWAY.touchClear || 0))
+}
+
+function approachGateAlt() {
+  return RUNWAY.gateAlt || 100 * 0.3048
+}
+
+function lightLeadM() {
+  return RUNWAY.lightLead || 1600
+}
+
+/** 100 ft until the first light, then a straight line down to 0 on the landing line. */
+function lightGlideAlt(along) {
+  const gate = approachGateAlt()
+  const lead = lightLeadM()
+  const touch = minTouchAlong()
+  if (along >= lead) return gate
+  if (along <= touch) return 0
+  return gate * (along - touch) / (lead - touch)
+}
+
 function computeHomeLandPlan() {
-  const px = player.root.position.x
-  const pz = player.root.position.z
-  const south = homeLandPlanForHdg(0)
-  const north = homeLandPlanForHdg(180)
-  const alongSouth = south.threshZ - pz
-  const alongNorth = pz - north.threshZ
-  const score = (along, fix) => {
-    const onSide = along > 200 ? 0 : 4000
-    const distFix = Math.hypot(px - fix.x, pz - fix.z)
-    return onSide + distFix
-  }
-  return score(alongSouth, south.fix) <= score(alongNorth, north.fix) ? south : north
+  // Land the way the aircraft was parked, following that runway's guide lights.
+  return designatedLandPlan()
 }
 
 function applyHomeLandPlan(plan) {
@@ -2901,12 +2846,6 @@ function alongToThreshold(pz, threshZ, landHdg) {
 
 function runwayCrossTrack(px) {
   return px - RUNWAY.x
-}
-
-function runwayCrossTrackCorr(px, landHdg) {
-  const xtk = runwayCrossTrack(px)
-  const alongSign = Math.cos(THREE.MathUtils.degToRad(landHdg))
-  return THREE.MathUtils.clamp(-xtk * alongSign * 0.09, -28, 28)
 }
 
 function setHomeLandPhase(next, message) {
@@ -2928,61 +2867,84 @@ function updateHomeLand(_dt, speed) {
   const along = alongToThreshold(pz, thresh.z, ap.landHdg)
   const xtk = Math.abs(runwayCrossTrack(px))
   const approachSpd = Math.max(flight.stall * 1.35, flight.cruise * 0.42, 22)
-  const hdgCorr = runwayCrossTrackCorr(px, ap.landHdg)
   const hdg = currentHeadingDeg()
   const hdgErr = Math.abs(((ap.landHdg - hdg + 540) % 360) - 180)
 
-  // Overflew the strip — reverse approach and go back to the fix.
-  if (along < -250 && alt > 35 && ap.landPhase !== "nav") {
-    applyHomeLandPlan(homeLandPlanForHdg((ap.landHdg + 180) % 360))
-    setHomeLandPhase("nav", "Autoland · circling for the other end")
+  const gearDown = player.def.gear?.mode !== "retract" || (player.controls.gear > 0.5 && player.gearT > 0.7)
+  const linedUp = xtk < 40 && hdgErr < 10 && along >= LAND_LINEUP_MIN && gearDown
+  const alongSign = Math.cos(THREE.MathUtils.degToRad(ap.landHdg))
+  // A couple of degrees of correction keeps the straight-in on the centerline
+  // without bending the path into a turn.
+  const straightSteer = THREE.MathUtils.clamp(-runwayCrossTrack(px) * alongSign * 0.045, -4, 4)
+  const captureSteer = THREE.MathUtils.clamp(-runwayCrossTrack(px) * alongSign * 0.08, -40, 40)
+
+  // Past the runway and still flying — go to the other end instead of skimming away.
+  if (along < -80 && ap.landPhase !== "nav" && ap.landPhase !== "flare") {
+    applyHomeLandPlan(designatedLandPlan())
+    ap.inbound = false
+    setHomeLandPhase("nav", "Autoland · following the lights")
+    return
+  }
+
+  // Still turning inside 200 ft. Go back to the lineup point instead of descending.
+  if (
+    along < LAND_LINEUP_MIN
+    && (xtk > 35 || hdgErr > 12)
+    && ap.landPhase !== "nav"
+    && ap.landPhase !== "flare"
+  ) {
+    applyHomeLandPlan(designatedLandPlan())
+    ap.inbound = false
+    setHomeLandPhase("nav", "Autoland · lining up farther out")
     return
   }
 
   if (ap.landPhase === "nav") {
-    configureApClimb()
-    ap.targetHdg = bearingToDeg(px, pz, fix.x, fix.z)
-    ap.targetAlt = LAND_NAV_ALT
-    ap.targetSpd = Math.max(flight.stall * 1.6, flight.cruise * 0.85)
-    // Only leave nav once we actually reach the approach fix (not merely near the field).
-    const atFix = distFix < 420
-    const established =
-      along > 600
-      && along < LAND_FIX_DIST + 200
-      && xtk < 90
-      && hdgErr < 25
-      && distFix < 900
-    if (atFix || established) {
-      setHomeLandPhase("align", "Autoland · aligning final")
+    const distField = Math.hypot(px - RUNWAY.x, pz - (RUNWAY.z0 + RUNWAY.z1) * 0.5)
+    if (distField < 5500) configureApLanding(false)
+    else configureApClimb()
+    const gate = approachGateAlt()
+    const lead = lightLeadM()
+    // Turn back at the first light. Flying on for kilometers was only to bleed down to 30 m.
+    if (!ap.inbound && along >= lead && xtk < 280) ap.inbound = true
+    if (!ap.inbound && along > lead + 500) ap.inbound = true
+    if (!ap.inbound && xtk < 110 && hdgErr < 30 && along >= lead * 0.7 && alt <= gate + 18) ap.inbound = true
+    ap.targetSpd = Math.max(flight.stall * 1.42, Math.min(flight.cruise * 0.48, 115))
+    // 30 m by the first light. The sloping path starts there.
+    ap.targetAlt = lightGlideAlt(Math.max(along, lead))
+    if (!ap.inbound && along < lead) {
+      const outbound = (ap.landHdg + 180) % 360
+      const outboundSteer = THREE.MathUtils.clamp(runwayCrossTrack(px) * alongSign * 0.05, -30, 30)
+      ap.targetHdg = (outbound + outboundSteer + 360) % 360
+      return
+    }
+    ap.targetHdg = (ap.landHdg + captureSteer + 360) % 360
+    if (alt <= gate + 8 && hdgErr < 18 && xtk < 70 && along >= lead) {
+      setHomeLandPhase("align", "Autoland · lining up")
     }
     return
   }
 
   if (ap.landPhase === "align") {
     configureApLanding(false)
-    // Steer toward a point on centerline ahead of the threshold so we don't cut the corner.
-    const captureAlong = Math.max(900, Math.min(along, 2200))
-    const alongSign = Math.cos(THREE.MathUtils.degToRad(ap.landHdg))
-    const aimZ = thresh.z - captureAlong * alongSign
-    ap.targetHdg = bearingToDeg(px, pz, RUNWAY.x, aimZ)
-    ap.targetAlt = LAND_ALIGN_ALT
-    ap.targetSpd = Math.max(approachSpd * 1.25, flight.stall * 1.45)
-    if (along < 2100 && along > 350 && xtk < 140 && hdgErr < 40) {
-      setHomeLandPhase("final", "Autoland · final approach")
-    } else if (along < 700 && along > 0) {
-      setHomeLandPhase("final", "Autoland · final approach")
+    // Heading stays on the runway. A wider nudge is allowed until the descent
+    // starts, so a late capture can still reach the centerline.
+    ap.targetHdg = (ap.landHdg + captureSteer + 360) % 360
+    ap.targetAlt = lightGlideAlt(along)
+    ap.targetSpd = Math.max(approachSpd, flight.stall * 1.35)
+    if (linedUp && along <= lightLeadM() && alt <= approachGateAlt() + 6) {
+      setHomeLandPhase("final", "Autoland · straight in")
     }
     return
   }
 
   if (ap.landPhase === "final") {
     configureApLanding(true)
-    const toTouch = Math.max(0, along - 180)
-    const glideAlt = Math.max(5, toTouch * LAND_GLIDE_TAN)
-    ap.targetHdg = (ap.landHdg + hdgCorr + 360) % 360
-    ap.targetAlt = glideAlt
-    ap.targetSpd = approachSpd
-    if (alt < 28 && along < 550 && along > -80) {
+    // 100 ft at the first light, then a straight line that is on the pavement at the landing line.
+    ap.targetHdg = (ap.landHdg + straightSteer + 360) % 360
+    ap.targetAlt = lightGlideAlt(along)
+    ap.targetSpd = flight.stall * 1.25
+    if (along < 40 && along > minTouchAlong() - 30 && alt < 8 && xtk < 28 && hdgErr < 12) {
       setHomeLandPhase("flare", "Autoland · flare")
     }
     return
@@ -2990,23 +2952,27 @@ function updateHomeLand(_dt, speed) {
 
   if (ap.landPhase === "flare") {
     configureApLanding(true)
-    ap.targetHdg = (ap.landHdg + hdgCorr * 0.35 + 360) % 360
+    ap.targetHdg = (ap.landHdg + straightSteer * 0.35 + 360) % 360
     ap.targetAlt = 0
-    ap.targetSpd = Math.max(flight.stall * 1.12, 16)
+    ap.targetSpd = flight.stall * 1.25
   }
 }
 
 function handleHomeLandRollout(dt, speed) {
   if (ap.landPhase !== "rollout") {
     ap.landPhase = "rollout"
+    ap.rolloutUntil = performance.now() + 5000
     const name = world.airportName || "home airport"
     toast(`Landed at ${name}`)
     beep(880, 0.1)
     setTimeout(() => beep(1100, 0.12), 100)
   }
+  const rolling = performance.now() < ap.rolloutUntil
   throttle = 0
+  braking = false
+  if (player?.def?.spoilers) player.controls.spoilers = rolling ? 0 : 1
+  if (rolling) return
   braking = true
-  if (player?.def?.spoilers) player.controls.spoilers = 1
   if (speed < 1.8) {
     systems.parking = true
     const name = world.airportName || "home airport"
@@ -3022,6 +2988,7 @@ function toggleHomeLand() {
     return
   }
   if (ap.land) {
+    if (performance.now() < ap.landArm) return
     clearHomeLand()
     refreshApPanel()
     toast("Autoland cancelled.")
@@ -3033,6 +3000,7 @@ function toggleHomeLand() {
     return
   }
   applyHomeLandPlan(computeHomeLandPlan())
+  ap.landArm = performance.now() + 1200
   ap.land = true
   ap.landPhase = "nav"
   ap.on = true
@@ -3129,6 +3097,7 @@ function refreshApPanel() {
   systems.autothrottle = ap.on && ap.spd
   systems.apApp = ap.on && ap.land
   refreshSysPanel()
+  refreshSysDocks()
 }
 
 function refreshSysPanel() {
@@ -3339,15 +3308,12 @@ function applyAutopilot(dt, speed) {
 
   const flight = player.def.flight
   const pilot = Math.max(Math.abs(held.pitch), Math.abs(held.roll), Math.abs(held.yaw))
-  const mousePilot = mouseStick.live
-    ? Math.max(Math.abs(mouseStick.pitch), Math.abs(mouseStick.roll))
-    : 0
   const keysPilot = keys.has("KeyW") || keys.has("KeyS") || keys.has("KeyA") || keys.has("KeyD")
     || keys.has("ArrowUp") || keys.has("ArrowDown") || keys.has("ArrowLeft") || keys.has("ArrowRight")
     || keys.has("KeyQ") || keys.has("KeyE")
   // Home land tolerates light touch drag so camera looks don't cancel the approach.
   const kick = ap.land ? 0.82 : 0.45
-  if (pilot > kick || mousePilot > kick || keysPilot) {
+  if (pilot > kick || keysPilot) {
     disengageAp("Autopilot kicked off — you took the stick.")
     return
   }
@@ -3372,7 +3338,7 @@ function applyAutopilot(dt, speed) {
   const aoaNow = pitchNow - pathPitch
 
   // Speed first. Climb is gated hard so ALT bumps can't haul into a stall spiral.
-  const minSafe = landing ? flight.stall * 1.15 : flight.stall * 1.5
+  const minSafe = ap.land ? flight.stall * (flaring ? 1.05 : 1.18) : flight.stall * 1.5
   const climbReady = speed > flight.stall * 1.7 && aoaNow < 0.16 && pitchNow < 0.14
   const slow = speed < minSafe
   const noseHigh = pitchNow > 0.16 || aoaNow > 0.18
@@ -3380,20 +3346,57 @@ function applyAutopilot(dt, speed) {
   const energy = THREE.MathUtils.clamp((speed - minSafe) / Math.max(12, flight.cruise * 0.4), 0, 1)
   const low = alt < 120
 
-  // Bank-only heading (no rudder) — AP yaw was fighting the roll→yaw mapping.
-  if (ap.hdg && !protecting) {
-    const bankCap = flaring ? 0.2 : ap.land ? 0.42 : climbReady && altErr > 30 ? 0.25 : 0.38
-    const wantBank = THREE.MathUtils.clamp(hdgErr * (ap.land ? 0.028 : 0.02), -bankCap, bankCap)
-    stick.roll = THREE.MathUtils.clamp((wantBank - bankRad) * 1.4, -1, 1)
+  // Home land yaws the nose toward the runway and keeps the wings level.
+  // Banking for that turn was rolling the jet over instead of bringing it back.
+  if (ap.land) {
+    stick.roll = THREE.MathUtils.clamp(-bankRad * 2.2, -1, 1)
+    stick.yaw = THREE.MathUtils.clamp(-hdgErr / 16, -1, 1)
+  } else if (ap.hdg && !protecting) {
+    const bankCap = flaring ? 0.22
+      : ap.landPhase === "final" ? 0.32
+      : ap.land ? 0.45
+      : climbReady && altErr > 30 ? 0.25 : 0.38
+    const desiredRight = THREE.MathUtils.clamp(hdgErr * (ap.land ? 0.028 : 0.02), -bankCap, bankCap)
+    stick.roll = THREE.MathUtils.clamp((desiredRight - bankRad) * 1.4, -1, 1)
   } else {
     stick.roll = THREE.MathUtils.clamp(-bankRad * 1.8, -1, 1)
   }
-  stick.yaw = 0
+  if (!ap.land) stick.yaw = 0
 
-  if (flaring) {
-    const sink = velocity.y
-    const wantPitch = sink < -3 ? 0.12 : alt < 10 ? 0.09 : 0.05
-    stick.pitch = THREE.MathUtils.clamp((wantPitch - pitchNow) * 1.8, -0.25, 0.65)
+  if (ap.land) {
+    // The flight path follows the nose, so an altitude-error dive (about -10°)
+    // at jet speed is a sink past the hard-landing limit. Command a sink rate
+    // and pitch only enough to match it.
+    const speedSafe = Math.max(speed, 28)
+    const landAlong = alongToThreshold(
+      player.root.position.z,
+      ap.landThresh?.z ?? RUNWAY.z0,
+      ap.landHdg || RUNWAY.landHdg || 0,
+    )
+    const lead = lightLeadM()
+    const touch = minTouchAlong()
+    const onSlope = (ap.landPhase === "align" || ap.landPhase === "final") && landAlong < lead && landAlong > touch
+    const slope = approachGateAlt() / Math.max(1, lead - touch)
+    let vyTarget = 0
+    if (flaring) {
+      vyTarget = -1.2
+    } else if (onSlope) {
+      const track = -speedSafe * slope
+      vyTarget = THREE.MathUtils.clamp(track + (ap.targetAlt - alt) * 0.25, -4.5, 1.2)
+    } else if (alt > ap.targetAlt + 35) {
+      // Lose the extra height before the lights, instead of flying miles out at a crawl.
+      vyTarget = -9
+    } else if (alt > ap.targetAlt + 6) {
+      vyTarget = -5
+    } else if (alt < ap.targetAlt - 8) {
+      vyTarget = THREE.MathUtils.clamp((ap.targetAlt - alt) * 0.06, 0.4, 4)
+    }
+    // Stay off the pavement until the landing line, then meet it at 0.
+    if (landAlong > touch && alt < 2) vyTarget = Math.max(vyTarget, 0.15)
+    let wantPitch = Math.asin(THREE.MathUtils.clamp(vyTarget / speedSafe, -0.1, 0.22))
+    if (!onSlope && !flaring && alt <= ap.targetAlt + 4) wantPitch = Math.max(wantPitch, 0)
+    if (flaring && velocity.y < -2.2) wantPitch = Math.max(wantPitch, 0.04)
+    stick.pitch = THREE.MathUtils.clamp((wantPitch - pitchNow) * 1.7, -0.65, 0.55)
   } else if (protecting) {
     // Unload the wing, but don't dive into the dirt when low.
     const recoverPitch = low ? (noseHigh ? 0.0 : 0.04) : -0.1
@@ -3421,24 +3424,23 @@ function applyAutopilot(dt, speed) {
   }
 
   // Autothrottle — allow idle on final/flare; keep energy on cruise AP.
-  let spdTarget = landing
-    ? Math.max(ap.targetSpd, flight.stall * (flaring ? 1.08 : 1.2))
+  let spdTarget = ap.land
+    ? Math.max(ap.targetSpd, flight.stall * (flaring ? 1.05 : 1.18))
     : Math.max(ap.targetSpd, flight.stall * 1.6, flight.cruise * 0.8)
-  if (!landing && altErr > 15) spdTarget = Math.max(spdTarget, flight.cruise * 0.88)
-  if (!landing && !descending && (protecting || slow)) spdTarget = Math.max(spdTarget, flight.cruise * 0.92)
+  if (!ap.land && !landing && altErr > 15) spdTarget = Math.max(spdTarget, flight.cruise * 0.88)
+  if (!ap.land && !landing && !descending && (protecting || slow)) spdTarget = Math.max(spdTarget, flight.cruise * 0.92)
   const spdErr = spdTarget - speed
-  const thrMin = flaring ? 0 : landing ? 0.08 : 0.45
+  const thrMin = flaring ? 0 : ap.land ? 0.04 : 0.45
   const thrMax = flaring ? 0.4 : 1
   if (flaring) {
-    throttle = THREE.MathUtils.clamp(throttle - dt * 0.55, 0, thrMax)
-    if (spdErr > 5) throttle = THREE.MathUtils.clamp(throttle + spdErr * 0.02 * dt * 60, 0, thrMax)
+    throttle = THREE.MathUtils.clamp(throttle - dt * 0.9, 0, 0.12)
   } else if (descending && altErr < -25 && speed > flight.stall * 1.3) {
     // Pull power in a high approach so we can make the slope.
     throttle = THREE.MathUtils.clamp(throttle + Math.min(0, spdErr) * 0.04 * dt * 60, 0.15, 0.85)
   } else {
     throttle = THREE.MathUtils.clamp(throttle + spdErr * 0.03 * dt * 60, thrMin, thrMax)
   }
-  if (!landing && !descending && (protecting || altErr > 15 || slow)) throttle = 1
+  if (!ap.land && !landing && !descending && (protecting || altErr > 15 || slow)) throttle = 1
 }
 
 function resetToRunway(message) {
@@ -3456,6 +3458,11 @@ function resetToRunway(message) {
   throttle = 0
   takeoffBoost = 0
   rotateWait = 0
+  holdBank = 0
+  holdPitch = 0
+  rollLatch = 0
+  pitchLatch = 0
+  pitchTouched = false
   wasAirborne = false
   grounded = true
   systems.parking = false
@@ -3498,8 +3505,7 @@ function startFlight() {
   coach.hidden = false
   coach.textContent = playerIsCar()
     ? "Push Up / W or slide throttle to drive. Steer with Left / Right. Space brakes. Down reverses."
-    : "Throttle up, then move the mouse to bank and pitch — point the plane anywhere."
-  clearMouseStick()
+    : "Throttle up, then use the stick or arrow keys to bank and pitch."
   document.getElementById("hud-name").textContent =
     player.def.brand === "fedex"
       ? `${player.def.name} · FedEx Express`
@@ -3530,6 +3536,10 @@ function showMenu() {
   }
   hideCrashScreen()
   setSwapPanelOpen(false)
+  setFlyMore(false)
+  failOpen = false
+  apOpen = false
+  partsOpen = false
   crashFx?.clear()
   recovering = false
   crashTimer = 0
@@ -3548,7 +3558,6 @@ function showMenu() {
   if (settingsPage) settingsPage.hidden = true
   velocity.set(0, 0, 0)
   ap.on = false
-  clearMouseStick()
   clearHomeLand()
   clearCautions()
   refreshApPanel()
@@ -3717,42 +3726,34 @@ function crash(message) {
   lastCrashMessage = message || "That didn’t go as planned."
   toast(message)
   beep(90, 0.35, "sawtooth")
-  if (cheats.crashPhysics) {
-    crashTimer = playerIsCar() ? 4.2 : 5.5
-    crashGroundHits = 0
-    // Strong tumbling — barrel-roll + yaw so the wreck keeps rolling
-    const horiz = Math.hypot(velocity.x, velocity.z)
-    crashRollAxis.set(-velocity.z, 0, velocity.x)
-    if (crashRollAxis.lengthSq() < 0.01) crashRollAxis.set(1, 0, 0)
-    crashRollAxis.normalize()
-    crashSpin.set(
-      (Math.random() - 0.5) * 9 + crashRollAxis.x * (4 + horiz * 0.08),
-      (Math.random() - 0.5) * 5.5,
-      (Math.random() - 0.5) * 10 + crashRollAxis.z * (4 + horiz * 0.08)
-    )
-    const kick = playerIsCar() ? 16 : 22
-    velocity.x += (Math.random() - 0.5) * kick
-    velocity.z += (Math.random() - 0.5) * kick
-    velocity.y = playerIsCar() ? Math.abs(velocity.y) + 5 : Math.max(velocity.y, 2) + 10
-    crashFx?.begin({
-      craft: player,
-      position: player.root.position.clone(),
-      velocity: velocity.clone(),
-      isCar: playerIsCar(),
-    })
-    // Second impact boom
-    setTimeout(() => beep(55, 0.45, "sawtooth"), 120)
-    setTimeout(() => beep(40, 0.55, "square"), 280)
-    return
-  }
-  velocity.set(0, 0, 0)
-  setTimeout(() => {
-    if (mode === "fly" && recovering) showCrashScreen(lastCrashMessage)
-  }, 700)
+  crashTimer = playerIsCar() ? 4.2 : 5.5
+  crashGroundHits = 0
+  // Tumble, then burn. This used to wait on the crash-physics cheat.
+  const horiz = Math.hypot(velocity.x, velocity.z)
+  crashRollAxis.set(-velocity.z, 0, velocity.x)
+  if (crashRollAxis.lengthSq() < 0.01) crashRollAxis.set(1, 0, 0)
+  crashRollAxis.normalize()
+  crashSpin.set(
+    (Math.random() - 0.5) * 9 + crashRollAxis.x * (4 + horiz * 0.08),
+    (Math.random() - 0.5) * 5.5,
+    (Math.random() - 0.5) * 10 + crashRollAxis.z * (4 + horiz * 0.08)
+  )
+  const kick = playerIsCar() ? 16 : 22
+  velocity.x += (Math.random() - 0.5) * kick
+  velocity.z += (Math.random() - 0.5) * kick
+  velocity.y = playerIsCar() ? Math.abs(velocity.y) + 5 : Math.max(velocity.y, 2) + 10
+  crashFx?.begin({
+    craft: player,
+    position: player.root.position.clone(),
+    velocity: velocity.clone(),
+    isCar: playerIsCar(),
+  })
+  setTimeout(() => beep(55, 0.45, "sawtooth"), 120)
+  setTimeout(() => beep(40, 0.55, "square"), 280)
 }
 
 function stepCrashPhysics(dt) {
-  if (!player || !recovering || !cheats.crashPhysics) return false
+  if (!player || !recovering) return false
   if (crashPromptOpen) {
     crashFx?.update(dt, player.root.position)
     return true
@@ -3949,9 +3950,48 @@ function refreshFlyActions() {
   if (adi) adi.hidden = playerIsCar() || outside
   const cautions = document.getElementById("cautions")
   if (cautions) cautions.hidden = playerIsCar()
+  refreshSysDocks()
+}
+
+function refreshSysDocks() {
+  const flying = mode === "fly"
+  const showAp = flying && !!player && !playerIsCar() && !outside
   const apPanel = document.getElementById("ap-panel")
-  if (apPanel) apPanel.hidden = playerIsCar() || outside || mode !== "fly"
-  refreshMousePanel()
+  const apToggle = document.getElementById("ap-toggle")
+  const partsPanel = document.getElementById("parts-panel")
+  const partsToggle = document.getElementById("parts-toggle")
+  if (apToggle) {
+    apToggle.hidden = !showAp
+    apToggle.setAttribute("aria-expanded", showAp && apOpen ? "true" : "false")
+    apToggle.classList.toggle("on", showAp && apOpen)
+    apToggle.classList.toggle("live", !!ap.on)
+    apToggle.textContent = ap.on ? "AP ON" : "AP"
+  }
+  if (apPanel) apPanel.hidden = !showAp || !apOpen
+  if (partsToggle) {
+    partsToggle.hidden = !flying
+    partsToggle.setAttribute("aria-expanded", flying && partsOpen ? "true" : "false")
+    partsToggle.classList.toggle("on", flying && partsOpen)
+  }
+  if (partsPanel) partsPanel.hidden = !flying || !partsOpen
+}
+
+function setApOpen(open) {
+  apOpen = !!open
+  refreshSysDocks()
+}
+
+function setPartsOpen(open) {
+  partsOpen = !!open
+  refreshSysDocks()
+}
+
+function setFlyMore(open) {
+  flyMoreOpen = !!open
+  const panel = document.getElementById("fly-actions")
+  const button = document.getElementById("fly-more")
+  panel?.classList.toggle("more-open", flyMoreOpen)
+  if (button) button.setAttribute("aria-expanded", flyMoreOpen ? "true" : "false")
 }
 
 function bindFlyActions() {
@@ -3968,15 +4008,21 @@ function bindFlyActions() {
     else if (action === "orbit") goOrbitView()
     else if (action === "chat") setChatOpen(!chatOpen())
     else if (action === "planes") setSwapPanelOpen(!swapPanelOpen())
-    else if (action === "mouse") {
-      const panel = document.getElementById("mouse-panel")
-      if (panel) panel.hidden = !panel.hidden
-      refreshMousePanel()
-    }
     else if (action === "jump") onJumpKey()
     else if (action === "reset") resetToRunway("Back on the runway.")
     else if (action === "mute") toggleMute()
+    setFlyMore(false)
     button.blur()
+  })
+  document.getElementById("fly-more")?.addEventListener("click", (event) => {
+    event.preventDefault()
+    setFlyMore(!flyMoreOpen)
+  })
+  window.addEventListener("pointerdown", (event) => {
+    if (!flyMoreOpen) return
+    const target = event.target
+    if (target instanceof Element && target.closest("#fly-actions")) return
+    setFlyMore(false)
   })
   // Top bar cam chip also cycles views.
   const hudCam = document.getElementById("hud-cam")
@@ -4020,24 +4066,6 @@ function readStick() {
   if (keys.has("KeyD") || keys.has("ArrowRight")) stick.roll += 1
   if (keys.has("KeyQ")) stick.yaw -= 1
   if (keys.has("KeyE")) stick.yaw += 1
-  // Mouse aim: bank / steer with cursor; pitch only in the air (cars use keys for gas).
-  if (
-    mouseStick.live
-    && Math.abs(held.pitch) < 0.04
-    && Math.abs(held.roll) < 0.04
-    && !keys.has("KeyA") && !keys.has("KeyD")
-    && !keys.has("ArrowLeft") && !keys.has("ArrowRight")
-    && (
-      playerIsCar()
-      || (
-        !keys.has("KeyW") && !keys.has("KeyS")
-        && !keys.has("ArrowUp") && !keys.has("ArrowDown")
-      )
-    )
-  ) {
-    if (!playerIsCar()) stick.pitch += mouseStick.pitch
-    stick.roll += mouseStick.roll
-  }
   stick.pitch = THREE.MathUtils.clamp(stick.pitch, -1, 1)
   stick.roll = THREE.MathUtils.clamp(stick.roll, -1, 1)
   stick.yaw = THREE.MathUtils.clamp(stick.yaw, -1, 1)
@@ -4048,30 +4076,16 @@ function readStick() {
 
 /** Point the nose along the flight path and bank into the turn. */
 function tiltTowardTravel(dt) {
+  // Pitch chase was driving the nose into a dive on climb-out. Bank only, and only once clear of the runway.
   const speed = velocity.length()
-  if (grounded || speed < 9) {
+  const agl = Math.max(0, player.root.position.y - clearanceOf(player))
+  // Autoland keeps the wings level and yaws onto the runway. Banking into that
+  // yaw rolls the jet into a descending spiral around the lineup point.
+  if (ap.land || grounded || speed < 14 || agl < 40 || takeoffBoost > 0) {
     lastTrackYaw = null
     return
   }
-  forward.set(0, 0, 1).applyQuaternion(player.root.quaternion)
-  const pathPitch = Math.asin(THREE.MathUtils.clamp(velocity.y / speed, -1, 1))
-  const nosePitch = Math.asin(THREE.MathUtils.clamp(forward.y, -1, 1))
-  // Ease off while the stick is leading so pitch and yaw still respond.
-  const pitchGain = Math.abs(stick.pitch) > 0.2 ? 1.1 : 3.6
-  const pitchStep = (pathPitch - nosePitch) * (1 - Math.exp(-dt * pitchGain))
-  // Negative local X raises the nose.
-  player.root.rotateX(-pitchStep)
-
-  forward.set(0, 0, 1).applyQuaternion(player.root.quaternion)
-  const noseYaw = Math.atan2(forward.x, forward.z)
   const pathYaw = Math.atan2(velocity.x, velocity.z)
-  let yawErr = pathYaw - noseYaw
-  if (yawErr > Math.PI) yawErr -= Math.PI * 2
-  else if (yawErr < -Math.PI) yawErr += Math.PI * 2
-  const yawGain = Math.abs(stick.yaw) + Math.abs(stick.roll) > 0.2 ? 1.1 : 3.6
-  // Negative yaw turns toward +X, which is a right turn in this world.
-  player.root.rotateY(-yawErr * (1 - Math.exp(-dt * yawGain)))
-
   let yawRate = 0
   if (lastTrackYaw != null) {
     let delta = pathYaw - lastTrackYaw
@@ -4080,15 +4094,15 @@ function tiltTowardTravel(dt) {
     yawRate = delta / Math.max(dt, 1 / 120)
   }
   lastTrackYaw = pathYaw
-
   up.set(0, 1, 0).applyQuaternion(player.root.quaternion)
   right.set(1, 0, 0).applyQuaternion(player.root.quaternion)
   const bankRad = Math.atan2(right.y, up.y)
-  // Right turn (positive yaw rate) drops the right wing.
-  const wantBank = THREE.MathUtils.clamp(-yawRate * 0.9, -1.05, 1.05)
+  const wantBank = THREE.MathUtils.clamp(yawRate * 0.9, -0.7, 0.7)
+  // A latched bank is the turn. Don't pull the wings toward the path.
+  if (!ap.on && Math.abs(holdBank) > 0.1) return
   if (Math.abs(stick.roll) < 0.4) {
     const bankErr = wantBank - bankRad
-    player.root.rotateZ(bankErr * (1 - Math.exp(-dt * 2.8)))
+    player.root.rotateZ(bankErr * (1 - Math.exp(-dt * 2.2)))
   }
 }
 
@@ -4096,6 +4110,8 @@ function stepFlight(dt) {
   const def = player.def
   const flight = def.flight
   readStick()
+  const pilotPitch = stick.pitch
+  const pilotRoll = stick.roll
   if (!ap.on || !ap.spd) {
     if (held.throttle > 0 || keys.has("ShiftLeft") || keys.has("ShiftRight")) throttle += dt * 0.45
     if (held.throttle < 0 || keys.has("ControlLeft") || keys.has("ControlRight")) throttle -= dt * 0.45
@@ -4120,10 +4136,15 @@ function stepFlight(dt) {
   const ctrl = controlFactor()
   const authority = grounded ? 0.35 : THREE.MathUtils.clamp(speed / Math.max(12, flight.stall), 0.35, 1)
   const pitchAuth = grounded ? (speed > rotateMin * 0.55 ? 1 : 0.55) : authority
-  player.root.rotateX(-stick.pitch * flight.pitch * pitchAuth * ctrl * dt)
-  player.root.rotateZ(-stick.roll * flight.roll * (grounded ? 0.2 : authority) * ctrl * dt)
-  const steer = stick.yaw + stick.roll * (grounded ? 1 : 0.45)
-  // Negate yaw: +roll / ArrowRight must turn right (+Z-forward).
+  // In the air the pilot's pitch eases toward a held target below. Autopilot and the takeoff rotate still pitch directly.
+  const pitchDrive = !grounded && !ap.on ? 0 : pitchAuth
+  player.root.rotateX(-stick.pitch * flight.pitch * pitchDrive * ctrl * dt)
+  // In the air the pilot's bank eases toward a held target below. Autopilot still rolls directly.
+  const rollDrive = grounded ? 0.2 : ap.on ? authority : 0
+  player.root.rotateZ(stick.roll * flight.roll * rollDrive * ctrl * dt)
+  // Ground and autopilot keep their steer. The pilot's turn comes from the bank below.
+  const rollForYaw = grounded || ap.on ? -stick.roll : 0
+  const steer = stick.yaw + rollForYaw * (grounded ? 1 : 0.45)
   player.root.rotateY(-steer * flight.yaw * (grounded ? 1 : authority) * ctrl * dt * (grounded ? Math.min(1, 0.25 + speed / 30) : 1))
   // Asymmetric thrust yaw when one engine is out.
   if (!grounded && (failures.eng1 || failures.eng2) && !(failures.eng1 && failures.eng2)) {
@@ -4157,22 +4178,75 @@ function stepFlight(dt) {
   flightInfo.aoa = aoa
   flightInfo.stallSpeed = stallSpeed
 
-  if (!grounded && Math.abs(stick.roll) < 0.08) {
-    player.root.rotateZ(-bankRad * flight.stability * dt)
-  }
-  if (!ap.on && !grounded && Math.abs(stick.pitch) < 0.08 && speed > 8) {
-    const currentPitch = Math.asin(THREE.MathUtils.clamp(forward.y, -1, 1))
-    // Soft speed trim — don't haul the nose up into a stall while "hands off."
-    const speedTrim = THREE.MathUtils.clamp((flight.cruise * 0.88 - speed) / flight.cruise, -0.12, 0.14) * 0.18
-    player.root.rotateX(-(speedTrim - currentPitch) * flight.stability * 0.55 * dt)
+  // One press sets a bank or pitch and it stays. The next press is the correction.
+  // Autopilot and the ground still fly the stick directly.
+  const holdDead = 0.15
+  if (ap.on || grounded) {
+    holdBank = bankRad
+    holdPitch = Math.asin(THREE.MathUtils.clamp(forward.y, -1, 1))
+    rollLatch = 0
+    pitchLatch = 0
+    if (grounded) pitchTouched = false
+  } else {
+    const rolling = Math.abs(pilotRoll) >= holdDead
+    if (rolling) {
+      const sign = Math.sign(pilotRoll)
+      // A tap sets a new bank. Holding the key deepens it. The wings roll there slowly.
+      const step = rollLatch !== sign ? 0.3 : 0.18 * dt
+      holdBank = THREE.MathUtils.clamp(holdBank + sign * step, -0.9, 0.9)
+      rollLatch = sign
+    } else rollLatch = 0
+    const bankEase = 1 - Math.exp(-dt * 0.75)
+    const bankStep = (holdBank - bankRad) * bankEase
+    player.root.rotateZ(bankStep)
+    const flownBank = bankRad + bankStep
+    if (speed > 12 && Math.abs(flownBank) > 0.05) {
+      // The bank was yawing the nose away from the low wing.
+      const yawCmd = THREE.MathUtils.clamp(-flownBank / 0.8, -1, 1)
+      player.root.rotateY(yawCmd * flight.yaw * authority * ctrl * dt)
+    }
+
+    forward.set(0, 0, 1).applyQuaternion(player.root.quaternion)
+    let nosePitch = Math.asin(THREE.MathUtils.clamp(forward.y, -1, 1))
+    const pitching = Math.abs(pilotPitch) >= holdDead
+    if (pitching) {
+      const sign = Math.sign(pilotPitch)
+      if (pitchLatch !== sign && !pitchTouched && sign < 0) {
+        // First down press leaves the automatic climb and aims at a descent.
+        holdPitch = -0.12
+      } else {
+        const step = pitchLatch !== sign ? 0.12 : 0.07 * dt
+        holdPitch = THREE.MathUtils.clamp(holdPitch + sign * step, -0.32, 0.34)
+      }
+      pitchLatch = sign
+      pitchTouched = true
+    } else {
+      pitchLatch = 0
+      if (!pitchTouched && speed > 8) {
+        const agl = Math.max(0, player.root.position.y - clearanceOf(player))
+        // Hands-off still climbs clear of the ridge, then levels. A pitch press replaces that.
+        const speedTrim = THREE.MathUtils.clamp((flight.cruise * 0.88 - speed) / flight.cruise, -0.12, 0.14) * 0.18
+        holdPitch = Math.max(0, speedTrim)
+        if (agl < 800 && speed > flight.stall) holdPitch = 0.16
+      }
+    }
+    const stalled = takeoffBoost <= 0 && (speed < stallSpeed * 0.92 || aoa > 0.34)
+    if (speed > 8 && !stalled) {
+      const pitchEase = 1 - Math.exp(-dt * 0.75)
+      player.root.rotateX(-(holdPitch - nosePitch) * pitchEase)
+    }
     forward.set(0, 0, 1).applyQuaternion(player.root.quaternion)
     up.set(0, 1, 0).applyQuaternion(player.root.quaternion)
     right.set(1, 0, 0).applyQuaternion(player.root.quaternion)
+    flightInfo.bank = Math.atan2(right.y, up.y)
   }
 
+  const aglNow = Math.max(0, player.root.position.y - clearanceOf(player))
   // Arcade-friendly stall: warn early, punish late, keep enough lift to recover.
+  // Don't spear the runway — a stall on the climb-out used to drop the nose into the ground.
   const stalling = !grounded && takeoffBoost <= 0 && (speed < stallSpeed * 0.92 || aoa > 0.34)
-  if (stalling) {
+  const stallDive = stalling && aglNow > 35
+  if (stallDive) {
     player.root.rotateX(0.55 * dt * Math.max(0.15, 1 - speed / Math.max(1, stallSpeed)))
     player.root.rotateZ(Math.sin(performance.now() * 0.028) * 0.2 * dt)
     forward.set(0, 0, 1).applyQuaternion(player.root.quaternion)
@@ -4182,7 +4256,7 @@ function stepFlight(dt) {
 
   const flying = THREE.MathUtils.clamp(speed / Math.max(8, stallSpeed * 0.85), 0, 1.05)
   const bankLift = THREE.MathUtils.clamp(up.y, 0, 1)
-  const aoaLift = stalling
+  const aoaLift = stallDive
     ? 0.45
     : THREE.MathUtils.clamp(1 - Math.abs(aoa) * 1.1, 0.45, 1.05)
 
@@ -4213,7 +4287,7 @@ function stepFlight(dt) {
   if (!grounded || rotating) velocity.y += 9.81 * flying * bankLift * aoaLift * dt
   if (rotating) velocity.y = Math.max(velocity.y, 5)
   if (takeoffBoost > 0 && !grounded) velocity.y += 3.2 * Math.min(1, takeoffBoost) * dt
-  if (stalling) velocity.y -= 1.6 * dt
+  if (stallDive) velocity.y -= 1.6 * dt
   // Air mass moves the plane; shear layers shove harder when you cross them.
   if (!grounded) {
     const windBlend = 1 - Math.exp(-dt * (shearHit ? 1.6 : 0.35))
@@ -4231,13 +4305,14 @@ function stepFlight(dt) {
     }
   }
   if (!grounded && speed > 10) {
-    // Keep some of the real flight path so the nose can lean into it.
-    const align = stalling ? 0.35 : shearHit ? 0.3 : 0.55
+    // The nose leads the climb; the path catches up instead of dragging the nose down.
+    const align = stalling ? 0.85 : shearHit ? 0.7 : 1.5
     trackDir.copy(forward).multiplyScalar(Math.max(8, velocity.length()))
     velocity.lerp(trackDir, 1 - Math.exp(-dt * align))
   }
   if (!grounded && Math.abs(bankRad) > 0.2) {
-    velocity.addScaledVector(right, Math.sin(bankRad) * speed * 0.35 * dt)
+    // Slide toward the lowered wing so the path matches the bank.
+    velocity.addScaledVector(right, -Math.sin(bankRad) * speed * 0.28 * dt)
   }
   const spd = velocity.length()
   if (spd > 0.01) {
@@ -4300,7 +4375,8 @@ function stepFlight(dt) {
       let along = velocity.x * heading.x + velocity.z * heading.z
       along = Math.max(0, along)
       if (braking) along *= Math.max(0, 1 - dt * 2.4)
-      if (throttle < 0.04) along *= Math.max(0, 1 - dt * 0.7)
+      const rolloutFree = ap.land && ap.landPhase === "rollout" && performance.now() < ap.rolloutUntil
+      if (!rolloutFree && throttle < 0.04) along *= Math.max(0, 1 - dt * 0.7)
       velocity.x = heading.x * along
       velocity.z = heading.z * along
     }
@@ -4704,9 +4780,8 @@ function animate() {
     refreshBanLock()
   }
   if (mode === "fly" && recovering && (crashTimer > 0 || crashPromptOpen)) {
-    if (cheats.crashPhysics) stepCrashPhysics(dt)
+    stepCrashPhysics(dt)
   } else if (mode === "fly" && !recovering) {
-    if (!outside) decayMouseDrag(dt)
     if (outside) stepOutside(dt)
     else if (playerIsCar()) stepDrive(dt)
     else stepFlight(dt)
@@ -4804,6 +4879,7 @@ function animate() {
     updateAudio(player, showcaseThrottle, mode === "fly" ? velocity.length() : 0)
     if (mode === "fly") updateHud(velocity.length())
   }
+  updateLandingLights(performance.now())
   renderer.render(scene, camera)
   } catch (error) {
     console.error(error)
@@ -4977,6 +5053,18 @@ async function bootMenu() {
     clearFailures()
     refreshFailPanel()
   })
+  document.getElementById("fail-toggle")?.addEventListener("click", () => {
+    ensureAudio()
+    setFailOpen(!failOpen)
+  })
+  document.getElementById("ap-toggle")?.addEventListener("click", () => {
+    ensureAudio()
+    setApOpen(!apOpen)
+  })
+  document.getElementById("parts-toggle")?.addEventListener("click", () => {
+    ensureAudio()
+    setPartsOpen(!partsOpen)
+  })
   document.getElementById("fail-extinguish")?.addEventListener("click", () => {
     ensureAudio()
     extinguishFire()
@@ -5022,13 +5110,22 @@ function beginWithName(name, { multiplayer = false } = {}) {
         : `Joined via ${host}`
     }
     toast(`Multiplayer on — starting at ${world.placeName}.`)
-    appendChatLine({ text: "Chat is live — press T to talk.", system: true })
+    if (CHAT_ENABLED) appendChatLine({ text: "Chat is live — press T to talk.", system: true })
   } else {
     net.disconnect?.()
     if (hint) hint.textContent = "Singleplayer — you are flying alone."
     toast(`Singleplayer — starting at ${world.placeName}.`)
-    appendChatLine({ text: "Singleplayer — choose Multiplayer next time to chat on Wi‑Fi.", system: true })
+    if (CHAT_ENABLED) appendChatLine({ text: "Singleplayer — choose Multiplayer next time to chat on Wi‑Fi.", system: true })
   }
+}
+
+function randomUserId() {
+  const alphabet = "abcdefghjkmnpqrstuvwxyz23456789"
+  const bytes = new Uint8Array(6)
+  crypto.getRandomValues(bytes)
+  let tail = ""
+  for (const b of bytes) tail += alphabet[b % alphabet.length]
+  return tail
 }
 
 async function startApp() {
@@ -5043,8 +5140,6 @@ async function startApp() {
   nameStep.hidden = false
   placeStep.hidden = true
   modeStep.hidden = true
-  let saved = ""
-  try { saved = localStorage.getItem("tfs-player-name") || "" } catch { /* ignore */ }
   try {
     const raw = JSON.parse(localStorage.getItem("tfs-start-place") || "")
     if (raw && Number.isFinite(Number(raw.x)) && Number.isFinite(Number(raw.z))) {
@@ -5052,7 +5147,7 @@ async function startApp() {
     }
   } catch { /* ignore */ }
   const input = document.getElementById("player-name")
-  input.value = saved || "Demi"
+  input.value = randomUserId()
   input.focus()
   input.select()
   let submitting = false
@@ -5239,28 +5334,6 @@ document.getElementById("swap-search")?.addEventListener("input", (event) => {
   swapQuery = event.target.value || ""
   refreshSwapList()
 })
-document.getElementById("mouse-panel")?.addEventListener("click", (event) => {
-  const modeBtn = event.target.closest("[data-mouse]")
-  if (!modeBtn) return
-  mousePrefs.mode = modeBtn.dataset.mouse
-  clearMouseStick()
-  saveMousePrefs()
-  refreshMousePanel()
-  const label = mousePrefs.mode === "drag" ? "Drag the mouse to steer" : mousePrefs.mode === "off" ? "Mouse steering off" : "Cursor steers the plane"
-  toast(label)
-})
-document.getElementById("mouse-invert")?.addEventListener("click", () => {
-  mousePrefs.invert = !mousePrefs.invert
-  saveMousePrefs()
-  refreshMousePanel()
-  toast(mousePrefs.invert ? "Mouse pitch inverted" : "Mouse pitch normal")
-})
-document.getElementById("mouse-sens")?.addEventListener("input", (event) => {
-  mousePrefs.sens = THREE.MathUtils.clamp(Number(event.target.value) || 1, 0.4, 2.2)
-  saveMousePrefs()
-})
-refreshMousePanel()
-
 startApp().catch((error) => {
   boot.hidden = false
   boot.textContent = error && error.message ? error.message : "The hangar could not open."
@@ -5282,7 +5355,7 @@ window.addEventListener("keydown", (event) => {
     }
     return
   }
-  if (event.code === "KeyT" && hangarReady && chatRoot && !chatRoot.hidden) {
+  if (CHAT_ENABLED && event.code === "KeyT" && hangarReady && chatRoot && !chatRoot.hidden) {
     event.preventDefault()
     setChatOpen(true)
     return
@@ -5295,6 +5368,16 @@ window.addEventListener("keydown", (event) => {
   if (event.code === "Escape" && swapPanelOpen()) {
     event.preventDefault()
     setSwapPanelOpen(false)
+    return
+  }
+  if (event.code === "Escape" && (flyMoreOpen || failOpen || apOpen || partsOpen)) {
+    event.preventDefault()
+    setFlyMore(false)
+    failOpen = false
+    apOpen = false
+    partsOpen = false
+    refreshFailPanel()
+    refreshSysDocks()
     return
   }
   if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.code)) event.preventDefault()
@@ -5344,6 +5427,10 @@ function releaseTouch() {
   held.brake = 0
   held.run = 0
   joyPointer = null
+  throttlePointer = null
+  holdPointers.clear()
+  document.getElementById("joy")?.classList.remove("dragging")
+  document.getElementById("throttle-slider")?.classList.remove("dragging")
   const knob = document.getElementById("joy-knob")
   if (knob) knob.style.transform = "translate(0px, 0px)"
   for (const button of document.querySelectorAll("#aux-pad button.held, #fly-actions button.held")) {
@@ -5351,49 +5438,81 @@ function releaseTouch() {
   }
 }
 
+const holdPointers = new Map()
+
+function applyHold(button, value) {
+  const key = button.dataset.hold
+  if (!key) return
+  if (key === "brake") held.brake = value
+  else held[key] = Number(button.dataset.value) * value
+  button.classList.toggle("held", value > 0)
+}
+
+function releaseHoldPointer(pointerId) {
+  const button = holdPointers.get(pointerId)
+  if (!button) return
+  holdPointers.delete(pointerId)
+  const stillHeld = [...holdPointers.values()].includes(button)
+  if (!stillHeld) applyHold(button, 0)
+}
+
 function bindHoldButtons() {
   for (const button of document.querySelectorAll("[data-hold]")) {
-    const apply = (value) => {
-      const key = button.dataset.hold
-      if (key === "brake") held.brake = value
-      else held[key] = Number(button.dataset.value) * value
-      button.classList.toggle("held", value > 0)
-    }
     button.addEventListener("pointerdown", (event) => {
-      apply(1)
+      if (event.pointerType === "mouse" && event.button !== 0) return
+      applyHold(button, 1)
+      holdPointers.set(event.pointerId, button)
       try { button.setPointerCapture(event.pointerId) } catch (error) { /* already released */ }
       event.preventDefault()
     })
-    const clear = () => apply(0)
-    button.addEventListener("pointerup", clear)
-    button.addEventListener("pointercancel", clear)
+    button.addEventListener("contextmenu", (event) => event.preventDefault())
   }
+  window.addEventListener("pointerup", (event) => releaseHoldPointer(event.pointerId))
+  window.addEventListener("pointercancel", (event) => releaseHoldPointer(event.pointerId))
 }
 
 let joyPointer = null
+let throttlePointer = null
+
+function stickAxis(value) {
+  const dead = window.matchMedia("(pointer: coarse)").matches ? 0.08 : 0.12
+  const amount = Math.abs(value)
+  if (amount < dead) return 0
+  return Math.sign(value) * THREE.MathUtils.clamp((amount - dead) / (1 - dead), 0, 1)
+}
 
 function bindJoystick() {
   const joy = document.getElementById("joy")
   const knob = document.getElementById("joy-knob")
   const place = (event) => {
     const rect = joy.getBoundingClientRect()
-    const radius = rect.width * 0.34
+    const limit = Math.max(24, rect.width / 2 - knob.offsetWidth / 2)
     let dx = event.clientX - (rect.left + rect.width / 2)
     let dy = event.clientY - (rect.top + rect.height / 2)
     const len = Math.hypot(dx, dy)
-    if (len > radius && len > 0) {
-      dx = (dx / len) * radius
-      dy = (dy / len) * radius
+    if (len > limit && len > 0) {
+      dx = (dx / len) * limit
+      dy = (dy / len) * limit
     }
     knob.style.transform = `translate(${dx}px, ${dy}px)`
-    const nx = radius > 0 ? dx / radius : 0
-    const ny = radius > 0 ? -dy / radius : 0
-    const dead = 0.14
-    held.roll = Math.abs(nx) < dead ? 0 : THREE.MathUtils.clamp(nx, -1, 1)
-    held.pitch = Math.abs(ny) < dead ? 0 : THREE.MathUtils.clamp(ny, -1, 1)
+    const nx = limit > 0 ? dx / limit : 0
+    const ny = limit > 0 ? -dy / limit : 0
+    held.roll = stickAxis(nx)
+    held.pitch = stickAxis(ny)
+  }
+  const end = (event) => {
+    if (event && event.pointerId !== joyPointer) return
+    joyPointer = null
+    held.pitch = 0
+    held.roll = 0
+    joy.classList.remove("dragging")
+    knob.style.transform = "translate(0px, 0px)"
   }
   joy.addEventListener("pointerdown", (event) => {
+    if (joyPointer !== null && event.pointerId !== joyPointer) return
+    if (event.pointerType === "mouse" && event.button !== 0) return
     joyPointer = event.pointerId
+    joy.classList.add("dragging")
     place(event)
     try { joy.setPointerCapture(event.pointerId) } catch (error) { /* already released */ }
     event.preventDefault()
@@ -5401,34 +5520,58 @@ function bindJoystick() {
   joy.addEventListener("pointermove", (event) => {
     if (event.pointerId !== joyPointer) return
     place(event)
+    event.preventDefault()
   })
-  const end = (event) => {
-    if (event.pointerId !== joyPointer) return
-    joyPointer = null
-    held.pitch = 0
-    held.roll = 0
-    knob.style.transform = "translate(0px, 0px)"
-  }
   joy.addEventListener("pointerup", end)
   joy.addEventListener("pointercancel", end)
+  joy.addEventListener("contextmenu", (event) => event.preventDefault())
+  window.addEventListener("pointermove", (event) => {
+    if (event.pointerId !== joyPointer) return
+    place(event)
+  })
+  window.addEventListener("pointerup", end)
+  window.addEventListener("pointercancel", end)
 }
 
 function bindThrottle() {
+  const panel = document.getElementById("throttle-panel")
   const slider = document.getElementById("throttle-slider")
+  const knob = document.getElementById("throttle-knob")
   const move = (event) => {
     const rect = slider.getBoundingClientRect()
-    const next = 1 - (event.clientY - rect.top) / rect.height
-    throttle = THREE.MathUtils.clamp(next, 0, 1)
+    const knobH = knob.offsetHeight || 44
+    const travel = Math.max(1, rect.height - knobH)
+    const y = event.clientY - rect.top - knobH / 2
+    throttle = THREE.MathUtils.clamp(1 - y / travel, 0, 1)
   }
-  slider.addEventListener("pointerdown", (event) => {
+  const end = (event) => {
+    if (event.pointerId !== throttlePointer) return
+    throttlePointer = null
+    slider.classList.remove("dragging")
+  }
+  panel.addEventListener("pointerdown", (event) => {
+    if (throttlePointer !== null && event.pointerId !== throttlePointer) return
+    if (event.pointerType === "mouse" && event.button !== 0) return
+    throttlePointer = event.pointerId
+    slider.classList.add("dragging")
     move(event)
-    try { slider.setPointerCapture(event.pointerId) } catch (error) { /* already released */ }
+    try { panel.setPointerCapture(event.pointerId) } catch (error) { /* already released */ }
     event.preventDefault()
   })
-  slider.addEventListener("pointermove", (event) => {
-    if (!slider.hasPointerCapture(event.pointerId)) return
+  panel.addEventListener("pointermove", (event) => {
+    if (event.pointerId !== throttlePointer) return
+    move(event)
+    event.preventDefault()
+  })
+  panel.addEventListener("pointerup", end)
+  panel.addEventListener("pointercancel", end)
+  panel.addEventListener("contextmenu", (event) => event.preventDefault())
+  window.addEventListener("pointermove", (event) => {
+    if (event.pointerId !== throttlePointer) return
     move(event)
   })
+  window.addEventListener("pointerup", end)
+  window.addEventListener("pointercancel", end)
 }
 
 const pointers = new Map()
@@ -5449,18 +5592,10 @@ canvas.addEventListener("pointerdown", (event) => {
   lastX = event.clientX
   lastY = event.clientY
   if (isOrbitCam()) orbitAuto = false
-  updateMouseStick(event.clientX, event.clientY, event.pointerType)
 })
 canvas.addEventListener("pointermove", (event) => {
-  // Always track mouse aim while flying, even without a button held.
-  if (!pointers.has(event.pointerId) || pointers.size === 0) {
-    updateMouseStick(event.clientX, event.clientY, event.pointerType)
-  }
   const point = pointers.get(event.pointerId)
-  if (!point) {
-    // Hover-only path already updated mouse stick above.
-    return
-  }
+  if (!point) return
   const dx = event.clientX - point.x
   const dy = event.clientY - point.y
   point.x = event.clientX
@@ -5482,33 +5617,27 @@ canvas.addEventListener("pointermove", (event) => {
     return
   }
   if (dragging && outside) {
-    clearMouseStick()
     walkLookYaw -= dx * 0.0048
     walkLookPitch = THREE.MathUtils.clamp(walkLookPitch - dy * 0.0038, -1.15, 1.05)
     return
   }
   if (dragging && isCockpitCam()) {
-    clearMouseStick()
     cockLookYaw -= dx * 0.0045
     cockLookPitch = THREE.MathUtils.clamp(cockLookPitch - dy * 0.0035, -0.85, 0.7)
     cockLookYaw = THREE.MathUtils.clamp(cockLookYaw, -1.35, 1.35)
     return
   }
   if (dragging && (mode === "menu" || isOrbitCam())) {
-    clearMouseStick()
     orbitYaw -= dx * 0.006
     orbitPitch = THREE.MathUtils.clamp(orbitPitch + dy * 0.004, 0.05, 1.35)
     if (isOrbitCam()) orbitAuto = false
-    return
   }
-  updateMouseStick(event.clientX, event.clientY, event.pointerType)
 })
 canvas.addEventListener("pointerup", (event) => {
   pointers.delete(event.pointerId)
   if (pointers.size < 2) pinchDist = 0
   if (pointers.size > 0) return
   dragging = false
-  updateMouseStick(event.clientX, event.clientY, event.pointerType)
   if (moved > 8) return
   const rect = canvas.getBoundingClientRect()
   const pointer = new THREE.Vector2(
@@ -5535,19 +5664,12 @@ canvas.addEventListener("pointercancel", (event) => {
   pointers.delete(event.pointerId)
   if (pointers.size === 0) dragging = false
   pinchDist = 0
-  clearMouseStick()
-})
-canvas.addEventListener("pointerleave", () => {
-  if (pointers.size === 0) clearMouseStick()
-})
-window.addEventListener("blur", () => {
-  clearMouseStick()
 })
 window.addEventListener("gesturestart", (event) => event.preventDefault())
 window.addEventListener("touchmove", (event) => {
   const el = event.target
   if (!el || !el.closest) return
-  if (el === canvas || el.closest("#controls, #throttle-panel, #fail-panel")) event.preventDefault()
+  if (el === canvas || el.closest("#controls, #throttle-panel, #fail-dock, #fly-actions")) event.preventDefault()
 }, { passive: false })
 
 canvas.addEventListener("wheel", (event) => {
