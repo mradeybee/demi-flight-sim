@@ -10,8 +10,8 @@ import os from "node:os"
 import { fileURLToPath } from "node:url"
 import { WebSocketServer } from "ws"
 import {
+  PAD_LOCAL,
   slotOrigin,
-  padForSlot,
   sanitizeName,
   airportLabel,
 } from "../js/airportSlots.js"
@@ -50,13 +50,27 @@ function allocateSlot() {
   return slot
 }
 
+function sanitizeOrigin(x, z) {
+  const nx = Number(x)
+  const nz = Number(z)
+  if (!Number.isFinite(nx) || !Number.isFinite(nz)) return null
+  const limit = 88000
+  const dist = Math.hypot(nx, nz)
+  if (dist > limit) {
+    const scale = limit / dist
+    return { x: Math.round(nx * scale), z: Math.round(nz * scale) }
+  }
+  return { x: Math.round(nx), z: Math.round(nz) }
+}
+
 function publicPlayer(p) {
+  const origin = p.origin || slotOrigin(p.slot)
   return {
     id: p.id,
     name: p.name,
     slot: p.slot,
-    origin: slotOrigin(p.slot),
-    pad: padForSlot(p.slot),
+    origin,
+    pad: { x: origin.x + PAD_LOCAL.x, z: origin.z + PAD_LOCAL.z },
     label: airportLabel(p.name),
     state: p.state || null,
   }
@@ -96,6 +110,15 @@ const server = http.createServer((req, res) => {
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`)
     let pathname = decodeURIComponent(url.pathname)
+    if (pathname === "/lan.json") {
+      const urls = lanAddresses().map((ip) => `http://${ip}:${PORT}`)
+      res.writeHead(200, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-cache",
+      })
+      res.end(JSON.stringify({ urls }))
+      return
+    }
     if (pathname === "/") pathname = "/index.html"
     if (pathname.includes("..")) {
       res.writeHead(403)
@@ -145,7 +168,8 @@ wss.on("connection", (ws) => {
       const name = sanitizeName(msg.name)
       const id = `p${nextId++}`
       const slot = allocateSlot()
-      me = { id, name, slot, ws, state: null }
+      const origin = sanitizeOrigin(msg.x, msg.z) || slotOrigin(slot)
+      me = { id, name, slot, origin, ws, state: null }
       players.set(id, me)
       send(ws, {
         type: "welcome",

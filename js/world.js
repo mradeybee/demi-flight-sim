@@ -3,8 +3,8 @@ import {
   PAD_LOCAL,
   RUNWAY_LOCAL,
   SLOT_ORIGINS,
+  TOWER_LOCAL,
   slotOrigin,
-  padForSlot,
   towerForSlot,
   airportLabel,
 } from "./airportSlots.js"
@@ -13,10 +13,10 @@ export const PAD = { ...PAD_LOCAL }
 export const RUNWAY = { ...RUNWAY_LOCAL }
 /** Soft world bound — flat Earth playground spanning all continents. */
 export const WORLD_RADIUS = 92000
-export { slotOrigin, padForSlot, towerForSlot, airportLabel }
+export { slotOrigin, towerForSlot, airportLabel }
 
 /** Land disks: [x, z, radius, colorHex, label] — muted earth tones (satellite-like). */
-const CONTINENTS = [
+export const CONTINENTS = [
   // North America (Turbo Field / home)
   [-2500, 500, 11000, 0x4a6340, "North America"],
   // Greenland
@@ -50,7 +50,7 @@ const CONTINENTS = [
   [42000, 28000, 1600, 0x456848, "New Zealand"],
 ]
 
-const WORLD_AIRPORTS = [
+export const WORLD_AIRPORTS = [
   [10500, -2800, "CAIRO"],
   [-11800, 5200, "MIAMI"],
   [1800, 13200, "RIO"],
@@ -72,6 +72,60 @@ const WORLD_AIRPORTS = [
   [0, 38000, "SOUTH POLE"],
   [42000, 27000, "AUCKLAND"],
 ]
+
+/** Map picker bounds — landmasses, with a margin of ocean around them. */
+export const START_BOUNDS = { minX: -26000, maxX: 54000, minZ: -28000, maxZ: 52000 }
+
+export function prettyPlace(name) {
+  const raw = String(name || "")
+  if (raw === "UK") return "UK"
+  return raw.toLowerCase().replace(/(^|[\s-])\w/g, (ch) => ch.toUpperCase())
+}
+
+/** Closest city, otherwise the continent under (x, z), otherwise ocean. */
+export function describePlace(x, z) {
+  let best = null
+  let bestD = 5000
+  for (const [ax, az, name] of WORLD_AIRPORTS) {
+    const d = Math.hypot(x - ax, z - az)
+    if (d < bestD) {
+      bestD = d
+      best = prettyPlace(name)
+    }
+  }
+  if (best) return best
+  let hit = null
+  let hitD = Infinity
+  for (const [cx, cz, r, , label] of CONTINENTS) {
+    const d = Math.hypot(x - cx, z - cz)
+    if (d < r && d < hitD) {
+      hit = label
+      hitD = d
+    }
+  }
+  return hit || "the ocean"
+}
+
+/** Shift a point off a scenic runway so your own field can sit beside it. */
+export function spawnBeside(x, z) {
+  let px = x
+  let pz = z
+  for (const [ax, az] of WORLD_AIRPORTS) {
+    const cx = ax - 40
+    const cz = az + 700
+    if (Math.hypot(px - cx, pz - cz) < 1800) {
+      px = ax - 2400
+      pz = az
+    }
+  }
+  const lim = 88000
+  const d = Math.hypot(px, pz)
+  if (d > lim) {
+    px = (px / d) * lim
+    pz = (pz / d) * lim
+  }
+  return { x: px, z: pz }
+}
 
 function seededNoise(x, y) {
   const n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453
@@ -489,7 +543,7 @@ export function createWorld(scene) {
     return Math.hypot(px - (x0 + t * dx), pz - (z0 + t * dz))
   }
 
-  function addRoadSegment(x0, z0, x1, z1, width = HIGHWAY_WIDTH, parent = scene, y = 0.04) {
+  function addRoadSegment(x0, z0, x1, z1, width = HIGHWAY_WIDTH, parent = scene, y = 0.04, owner = null) {
     const dx = x1 - x0
     const dz = z1 - z0
     const len = Math.hypot(dx, dz)
@@ -503,12 +557,14 @@ export function createWorld(scene) {
     seg.position.set(cx, y, cz)
     seg.receiveShadow = true
     parent.add(seg)
-    const entry = { x0, z0, x1, z1, width, cx, cz, len, yaw }
+    const entry = { x0, z0, x1, z1, width, cx, cz, len, yaw, owner, mesh: seg }
     roads.push(entry)
     return entry
   }
 
-  function addDashedCenterline(x0, z0, x1, z1, parent, y = 0.06) {
+  const decals = []
+
+  function addDashedCenterline(x0, z0, x1, z1, parent, y = 0.06, owner = null) {
     const dx = x1 - x0
     const dz = z1 - z0
     const len = Math.hypot(dx, dz)
@@ -521,6 +577,7 @@ export function createWorld(scene) {
       dash.rotation.z = yaw
       dash.position.set(x0 + ux * d, y, z0 + uz * d)
       parent.add(dash)
+      if (owner) decals.push({ owner, mesh: dash })
     }
   }
 
@@ -614,6 +671,7 @@ export function createWorld(scene) {
 
   // Player airports (multiplayer slots) — built on demand via ensureAirport.
   const playerAirports = new Map()
+  const customOrigins = new Map()
 
   function paintSignTexture(mesh, text) {
     const canvas = document.createElement("canvas")
@@ -638,7 +696,7 @@ export function createWorld(scene) {
     mesh.material.needsUpdate = true
   }
 
-  function buildPlayerAirport(ox, oz, label) {
+  function buildPlayerAirport(ox, oz, label, owner = null) {
     const group = new THREE.Group()
     group.name = `airport-${ox}-${oz}`
 
@@ -739,7 +797,7 @@ export function createWorld(scene) {
     towerGroup.add(shaft, cab, roof)
     towerGroup.position.set(ox + 115, 0, oz + 190)
     group.add(towerGroup)
-    obstacles.push({ name: "tower", type: "cylinder", x: ox + 115, z: oz + 190, r: 8, h: 50 })
+    obstacles.push({ owner, name: "tower", type: "cylinder", x: ox + 115, z: oz + 190, r: 8, h: 50 })
 
     const hangar = new THREE.Mesh(
       new THREE.BoxGeometry(78, 16, 46),
@@ -755,7 +813,7 @@ export function createWorld(scene) {
     )
     hangarDoor.position.set(ox - 310, 5.2, oz + 143)
     group.add(hangarDoor)
-    obstacles.push({ name: "hangar", type: "cylinder", x: ox - 310, z: oz + 120, r: 42, h: 18 })
+    obstacles.push({ owner, name: "hangar", type: "cylinder", x: ox - 310, z: oz + 120, r: 42, h: 18 })
 
     // Service road: apron / car pad → west edge of field, then south toward highway spur.
     const carPadX = ox + PAD_LOCAL.x - 40
@@ -763,34 +821,78 @@ export function createWorld(scene) {
     const roadW = 12
     const westX = ox - 420
     const southZ = oz + 780
-    addRoadSegment(carPadX, carPadZ, westX, carPadZ, roadW, group, 0.05)
-    addDashedCenterline(carPadX, carPadZ, westX, carPadZ, group, 0.07)
-    addRoadSegment(westX, carPadZ, westX, southZ, roadW, group, 0.05)
-    addDashedCenterline(westX, carPadZ, westX, southZ, group, 0.07)
+    addRoadSegment(carPadX, carPadZ, westX, carPadZ, roadW, group, 0.05, owner)
+    addDashedCenterline(carPadX, carPadZ, westX, carPadZ, group, 0.07, owner)
+    addRoadSegment(westX, carPadZ, westX, southZ, roadW, group, 0.05, owner)
+    addDashedCenterline(westX, carPadZ, westX, southZ, group, 0.07, owner)
     // Spur from airport service tip out to the highway ring.
     const ang = Math.atan2(southZ - HIGHWAY_CZ, westX - HIGHWAY_CX)
     const hx = Math.cos(ang) * HIGHWAY_R + HIGHWAY_CX
     const hz = Math.sin(ang) * HIGHWAY_R + HIGHWAY_CZ
-    addRoadSegment(westX, southZ, hx, hz, 12, scene, 0.045)
-    addDashedCenterline(westX, southZ, hx, hz, scene, 0.065)
+    addRoadSegment(westX, southZ, hx, hz, 12, scene, 0.045, owner)
+    addDashedCenterline(westX, southZ, hx, hz, scene, 0.065, owner)
 
     scene.add(group)
     return { group, sign, ox, oz, label }
   }
 
-  function ensureAirport(slot, name) {
+  function dropAirport(slot) {
     const key = Number(slot) || 0
-    const origin = slotOrigin(key)
+    const owner = `slot-${key}`
+    const entry = playerAirports.get(key)
+    if (entry) {
+      scene.remove(entry.group)
+      playerAirports.delete(key)
+    }
+    for (let i = obstacles.length - 1; i >= 0; i -= 1) {
+      if (obstacles[i].owner === owner) obstacles.splice(i, 1)
+    }
+    for (let i = roads.length - 1; i >= 0; i -= 1) {
+      if (roads[i].owner !== owner) continue
+      const mesh = roads[i].mesh
+      mesh?.parent?.remove(mesh)
+      mesh?.geometry?.dispose?.()
+      roads.splice(i, 1)
+    }
+    for (let i = decals.length - 1; i >= 0; i -= 1) {
+      if (decals[i].owner !== owner) continue
+      const mesh = decals[i].mesh
+      mesh?.parent?.remove(mesh)
+      mesh?.geometry?.dispose?.()
+      decals.splice(i, 1)
+    }
+    customOrigins.delete(key)
+  }
+
+  function ensureAirport(slot, name, origin) {
+    const key = Number(slot) || 0
+    if (origin && Number.isFinite(Number(origin.x)) && Number.isFinite(Number(origin.z))) {
+      customOrigins.set(key, { x: Number(origin.x), z: Number(origin.z) })
+    }
+    const at = customOrigins.get(key) || slotOrigin(key)
     const label = airportLabel(name)
     let entry = playerAirports.get(key)
+    if (entry && (Math.abs(entry.ox - at.x) > 2 || Math.abs(entry.oz - at.z) > 2)) {
+      dropAirport(key)
+      customOrigins.set(key, { x: at.x, z: at.z })
+      entry = null
+    }
     if (!entry) {
-      entry = buildPlayerAirport(origin.x, origin.z, label)
+      entry = buildPlayerAirport(at.x, at.z, label, `slot-${key}`)
       playerAirports.set(key, entry)
     } else if (entry.label !== label) {
       entry.label = label
       paintSignTexture(entry.sign, label)
     }
     return entry
+  }
+
+  function padFor(slot) {
+    const key = Number(slot) || 0
+    const entry = playerAirports.get(key)
+    if (entry) return { x: entry.ox + PAD_LOCAL.x, z: entry.oz + PAD_LOCAL.z }
+    const at = customOrigins.get(key) || slotOrigin(key)
+    return { x: at.x + PAD_LOCAL.x, z: at.z + PAD_LOCAL.z }
   }
 
   // Highway ring around home continent (registered in roads[] for driving).
@@ -1100,22 +1202,25 @@ export function createWorld(scene) {
     return onRoad(x, z) || onRunway(x, z) || onPlayerAirport(x, z)
   }
 
-  function setLocalAirport(slot, name) {
-    ensureAirport(slot, name)
-    const origin = slotOrigin(slot)
-    const pad = padForSlot(slot)
-    const tower = towerForSlot(slot)
+  function setLocalAirport(slot, name, origin) {
+    const key = Number(slot) || 0
+    if (api.localSlot !== key) dropAirport(api.localSlot)
+    const entry = ensureAirport(key, name, origin)
+    const at = { x: entry.ox, z: entry.oz }
+    const pad = { x: at.x + PAD_LOCAL.x, z: at.z + PAD_LOCAL.z }
+    const tower = { x: at.x + TOWER_LOCAL.x, y: TOWER_LOCAL.y, z: at.z + TOWER_LOCAL.z }
     PAD.x = pad.x
     PAD.z = pad.z
-    RUNWAY.x = origin.x + RUNWAY_LOCAL.x
-    RUNWAY.z0 = origin.z + RUNWAY_LOCAL.z0
-    RUNWAY.z1 = origin.z + RUNWAY_LOCAL.z1
+    RUNWAY.x = at.x + RUNWAY_LOCAL.x
+    RUNWAY.z0 = at.z + RUNWAY_LOCAL.z0
+    RUNWAY.z1 = at.z + RUNWAY_LOCAL.z1
     RUNWAY.halfWidth = RUNWAY_LOCAL.halfWidth
     api.towerPos = tower
-    api.localSlot = Number(slot) || 0
-    api.localOrigin = origin
+    api.localSlot = key
+    api.localOrigin = at
     api.airportName = airportLabel(name)
-    return { pad, tower, origin, label: api.airportName }
+    api.placeName = describePlace(at.x, at.z)
+    return { pad, tower, origin: at, label: api.airportName }
   }
 
   function onPlayerAirport(x, z) {
@@ -1180,8 +1285,10 @@ export function createWorld(scene) {
     localSlot: 0,
     localOrigin: slotOrigin(0),
     airportName: airportLabel("Turbo"),
+    placeName: "North America",
     ensureAirport,
     setLocalAirport,
+    padFor,
     landmarks: {
       cairo: { x: 10500, y: 80, z: -2800 },
       miami: { x: -11800, y: 60, z: 5200 },

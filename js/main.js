@@ -3,11 +3,11 @@ import { PLANES, partButtons, partSummary } from "./catalog.js"
 import { createAircraft, disposeCraft, updateAircraft } from "./aircraft.js"
 import { CARS, createCar, disposeCar, updateCar, isCar } from "./vehicles.js"
 import { ensureModel, isModelCached, preloadAircraftModels, warmAircraftModels } from "./models.js"
-import { PAD, RUNWAY, createWorld, WORLD_RADIUS } from "./world.js"
+import { PAD, RUNWAY, createWorld, WORLD_RADIUS, CONTINENTS, WORLD_AIRPORTS, START_BOUNDS, describePlace, prettyPlace, spawnBeside } from "./world.js"
 import { COCKPIT_BUTTONS } from "./cockpitButtons.js"
 import { createWeatherController } from "./weather.js"
 import { createNet } from "./net.js"
-import { sanitizeName, airportLabel, padForSlot } from "./airportSlots.js"
+import { sanitizeName, airportLabel } from "./airportSlots.js"
 import { createCrashFx } from "./crashFx.js"
 
 const FLEET = [...PLANES, ...CARS]
@@ -105,6 +105,27 @@ const stick = { pitch: 0, roll: 0, yaw: 0 }
 /** Mouse / trackpad aim stick — screen offset from center steers the plane. */
 const mouseStick = { pitch: 0, roll: 0, live: false }
 let mouseFlyHintShown = false
+let lastAimX = null
+let lastAimY = null
+let planeQuery = ""
+let swapQuery = ""
+const mousePrefs = { mode: "aim", sens: 1, invert: false }
+
+function loadMousePrefs() {
+  try {
+    const raw = JSON.parse(localStorage.getItem("tfs-mouse") || "")
+    if (raw?.mode === "aim" || raw?.mode === "drag" || raw?.mode === "off") mousePrefs.mode = raw.mode
+    const sens = Number(raw?.sens)
+    if (Number.isFinite(sens)) mousePrefs.sens = THREE.MathUtils.clamp(sens, 0.4, 2.2)
+    mousePrefs.invert = !!raw?.invert
+  } catch { /* ignore */ }
+}
+
+function saveMousePrefs() {
+  try { localStorage.setItem("tfs-mouse", JSON.stringify(mousePrefs)) } catch { /* ignore */ }
+}
+
+loadMousePrefs()
 const velocity = new THREE.Vector3()
 const forward = new THREE.Vector3()
 const up = new THREE.Vector3()
@@ -113,6 +134,8 @@ const desiredCam = new THREE.Vector3()
 const look = new THREE.Vector3()
 const nose = new THREE.Vector3()
 const camUp = new THREE.Vector3()
+const trackDir = new THREE.Vector3()
+let lastTrackYaw = null
 
 let mode = "menu"
 let selected = -1
@@ -171,6 +194,7 @@ const worldCars = []
 let homeCraft = null
 let playerName = "Pilot"
 let localOrigin = { x: 0, z: 0 }
+let startAt = { x: 0, z: 0 }
 const remotes = new Map()
 let netSyncAcc = 0
 let trafficUiAcc = 0
@@ -631,7 +655,8 @@ function refreshAirportUi() {
   const banner = document.getElementById("airport-banner")
   const eyebrow = document.getElementById("hangar-eyebrow")
   const label = world?.airportName || airportLabel(playerName)
-  if (banner) banner.textContent = `You are at ${label}`
+  const where = world?.placeName
+  if (banner) banner.textContent = where ? `You are at ${label} · ${where}` : `You are at ${label}`
   if (eyebrow) eyebrow.textContent = cheats.admin ? `ADMIN · ${label}` : label
   const rename = document.getElementById("rename-input")
   if (rename && !rename.matches(":focus")) rename.value = playerName
@@ -783,7 +808,7 @@ function showWorldChatBubble(senderId, text) {
 
 function placeRemoteAtPad(remote, slot) {
   if (slot == null || !remote?.craft) return
-  const pad = padForSlot(slot)
+  const pad = world.padFor(slot)
   const y = clearanceOf(remote.craft)
   remote.craft.root.position.set(pad.x, y, pad.z)
   remote.craft.root.rotation.set(0, 0.4, 0)
@@ -840,7 +865,7 @@ function upsertRemote(peer) {
     }
     remotes.set(peer.id, remote)
     if (peer.slot != null) {
-      world.ensureAirport(peer.slot, peer.name)
+      world.ensureAirport(peer.slot, peer.name, peer.origin)
       placeRemoteAtPad(remote, peer.slot)
     }
     if (!isModelCached(def.id)) {
@@ -885,7 +910,7 @@ function upsertRemote(peer) {
       remote.plate = makeNameplate(peer.name)
       remote.craft.root.add(remote.plate)
     }
-    if (peer.slot != null) world.ensureAirport(peer.slot, peer.name)
+    if (peer.slot != null) world.ensureAirport(peer.slot, peer.name, peer.origin)
   }
   refreshAirportUi()
   return remote
@@ -976,21 +1001,23 @@ function refreshTrafficUi() {
 const net = createNet({
   onWelcome(msg) {
     if (msg.offline || !msg.you) {
-      world.setLocalAirport(0, playerName)
+      world.setLocalAirport(0, playerName, startAt)
       localOrigin = { ...world.localOrigin }
       refreshAirportUi()
-      toast("Flying offline — multiplayer did not connect.")
+      const hangarEl = document.getElementById("traffic-hangar")
+      if (hangarEl) hangarEl.textContent = "Playing alone — Wi‑Fi multiplayer is offline, but you can still fly."
+      toast("You can still fly. Multiplayer is offline.")
       return
     }
     playerName = msg.you.name
     try { localStorage.setItem("tfs-player-name", playerName) } catch { /* ignore */ }
-    world.setLocalAirport(msg.you.slot, playerName)
+    world.setLocalAirport(msg.you.slot, playerName, msg.you.origin || startAt)
     localOrigin = { ...world.localOrigin }
     if (player) place(player, PAD.x, PAD.z, 0.4)
     if (parked[0]) place(parked[0], PAD.x - 80, PAD.z + 250, 0.8)
     if (parked[1]) place(parked[1], PAD.x - 80, PAD.z + 340, -0.4)
     for (const peer of msg.peers || []) {
-      world.ensureAirport(peer.slot, peer.name)
+      world.ensureAirport(peer.slot, peer.name, peer.origin)
       const remote = upsertRemote(peer)
       if (peer.state) applyRemoteState({ id: peer.id, name: peer.name, slot: peer.slot, ...peer.state })
       else if (remote) placeRemoteAtPad(remote, peer.slot)
@@ -1001,13 +1028,13 @@ const net = createNet({
     if (hint && msg.joinUrlHint?.length) {
       hint.textContent = `Friends join: ${msg.joinUrlHint[0]}`
     }
-    toast(`${world.airportName} is ready`)
+    toast(`${world.airportName} · ${world.placeName}`)
     snapCam = true
     netSyncAcc = 99
     pushNetState(1)
   },
   onPeerJoin(player) {
-    world.ensureAirport(player.slot, player.name)
+    world.ensureAirport(player.slot, player.name, player.origin)
     const remote = upsertRemote(player)
     if (remote && !remote.hasPose) placeRemoteAtPad(remote, player.slot)
     toast(`${player.name} joined · ${airportLabel(player.name)}`)
@@ -1022,7 +1049,7 @@ const net = createNet({
     refreshTrafficUi()
   },
   onPeerUpdate(player) {
-    world.ensureAirport(player.slot, player.name)
+    world.ensureAirport(player.slot, player.name, player.origin)
     upsertRemote(player)
     refreshAirportUi()
   },
@@ -1934,37 +1961,123 @@ function curveMouseAxis(value, dead = 0.1) {
   return Math.sign(value) * Math.pow(THREE.MathUtils.clamp(t, 0, 1), 1.25)
 }
 
+function noteMouseSteer() {
+  if (mouseFlyHintShown) return
+  if (Math.abs(mouseStick.pitch) < 0.2 && Math.abs(mouseStick.roll) < 0.2) return
+  mouseFlyHintShown = true
+  const how = mousePrefs.mode === "drag" ? "Drag the mouse to steer" : "Mouse steers — move it to go anywhere"
+  toast(playerIsCar() ? "Mouse steers the car — gas with W / Up or the throttle" : how)
+}
+
 function updateMouseStick(clientX, clientY, pointerType = "mouse") {
-  if (!mouseFlyAllowed()) {
-    mouseStick.live = false
-    mouseStick.pitch = 0
-    mouseStick.roll = 0
-    return
-  }
-  // Touch has the on-screen stick; keep mouse/pen for desktop aim flying.
-  if (pointerType === "touch") {
-    mouseStick.live = false
+  if (mousePrefs.mode === "off" || !mouseFlyAllowed() || pointerType === "touch") {
+    clearMouseStick()
+    lastAimX = clientX
+    lastAimY = clientY
     return
   }
   // On-screen joystick wins while it's being held.
   if (Math.abs(held.pitch) > 0.04 || Math.abs(held.roll) > 0.04) {
-    mouseStick.live = false
+    clearMouseStick()
+    lastAimX = clientX
+    lastAimY = clientY
     return
   }
+  if (mousePrefs.mode === "drag") {
+    if (lastAimX == null || lastAimY == null) {
+      lastAimX = clientX
+      lastAimY = clientY
+      return
+    }
+    const dx = clientX - lastAimX
+    const dy = clientY - lastAimY
+    lastAimX = clientX
+    lastAimY = clientY
+    const sens = mousePrefs.sens
+    mouseStick.roll = THREE.MathUtils.clamp(mouseStick.roll + dx * 0.01 * sens, -1, 1)
+    if (!playerIsCar()) {
+      const dir = mousePrefs.invert ? 1 : -1
+      mouseStick.pitch = THREE.MathUtils.clamp(mouseStick.pitch + dy * 0.01 * sens * dir, -1, 1)
+    }
+    mouseStick.live = true
+    noteMouseSteer()
+    return
+  }
+  lastAimX = clientX
+  lastAimY = clientY
   const rect = canvas.getBoundingClientRect()
   if (rect.width < 8 || rect.height < 8) return
-  const nx = ((clientX - rect.left) / rect.width) * 2 - 1
-  const ny = ((clientY - rect.top) / rect.height) * 2 - 1
+  const sens = mousePrefs.sens
+  const nx = (((clientX - rect.left) / rect.width) * 2 - 1) * sens
+  let ny = (((clientY - rect.top) / rect.height) * 2 - 1) * sens
+  if (mousePrefs.invert) ny = -ny
   // Mouse right → bank / steer right; mouse up → pitch up (planes) or ignored for cars.
   mouseStick.roll = THREE.MathUtils.clamp(curveMouseAxis(nx), -1, 1)
   mouseStick.pitch = playerIsCar() ? 0 : THREE.MathUtils.clamp(curveMouseAxis(-ny), -1, 1)
   mouseStick.live = true
-  if (!mouseFlyHintShown && (Math.abs(mouseStick.pitch) > 0.2 || Math.abs(mouseStick.roll) > 0.2)) {
-    mouseFlyHintShown = true
-    toast(playerIsCar()
-      ? "Mouse steers the car — gas with W / Up or the throttle"
-      : "Mouse steers the plane — move it to go anywhere")
+  noteMouseSteer()
+}
+
+function decayMouseDrag(dt) {
+  if (mousePrefs.mode !== "drag" || !mouseStick.live) return
+  const keep = Math.exp(-dt * 2.4)
+  mouseStick.pitch *= keep
+  mouseStick.roll *= keep
+  if (Math.abs(mouseStick.pitch) < 0.02 && Math.abs(mouseStick.roll) < 0.02) clearMouseStick()
+}
+
+function planeMatches(def, query) {
+  if (!query || !def) return true
+  const hay = `${def.name} ${def.role || ""} ${def.group || ""} ${def.id || ""}`.toLowerCase()
+  return hay.includes(query)
+}
+
+function applyPlaneFilter() {
+  const query = planeQuery.trim().toLowerCase()
+  let heading = null
+  let shownUnder = 0
+  for (const child of list.children) {
+    if (child.tagName === "H3") {
+      if (heading) heading.hidden = shownUnder === 0
+      heading = child
+      shownUnder = 0
+      continue
+    }
+    const def = FLEET[Number(child.dataset.index)]
+    const ok = planeMatches(def, query)
+    child.hidden = !ok
+    if (ok) shownUnder += 1
   }
+  if (heading) heading.hidden = shownUnder === 0
+  const empty = document.getElementById("plane-empty")
+  const any = [...list.querySelectorAll(".plane-btn")].some((button) => !button.hidden)
+  if (empty) empty.hidden = any || !query
+}
+
+function refreshMousePanel() {
+  const panel = document.getElementById("mouse-panel")
+  const read = document.getElementById("mouse-read")
+  const sens = document.getElementById("mouse-sens")
+  const invert = document.getElementById("mouse-invert")
+  for (const button of document.querySelectorAll("[data-mouse]")) {
+    button.classList.toggle("on", button.dataset.mouse === mousePrefs.mode)
+  }
+  if (sens && document.activeElement !== sens) sens.value = String(mousePrefs.sens)
+  if (invert) {
+    invert.classList.toggle("on", mousePrefs.invert)
+    invert.textContent = mousePrefs.invert ? "Invert on" : "Invert off"
+  }
+  if (read) {
+    read.textContent = mousePrefs.mode === "drag"
+      ? "Drag to steer"
+      : mousePrefs.mode === "off"
+        ? "Keys and stick only"
+        : "Cursor steers"
+  }
+  document.body.classList.toggle("fly-mouse-aim", mode === "fly" && mousePrefs.mode === "aim")
+  document.body.classList.toggle("fly-mouse-drag", mode === "fly" && mousePrefs.mode === "drag")
+  document.body.classList.toggle("fly-mouse-off", mode === "fly" && mousePrefs.mode === "off")
+  document.getElementById("fly-mouse")?.classList.toggle("on", panel && !panel.hidden)
 }
 
 function clearMouseStick() {
@@ -2478,8 +2591,15 @@ async function selectVehicle(index) {
 }
 
 function selectRelative(step) {
-  const next = (selected + step + FLEET.length) % FLEET.length
-  void selectVehicle(next)
+  const query = planeQuery.trim().toLowerCase()
+  let index = selected
+  for (let n = 0; n < FLEET.length; n += 1) {
+    index = (index + step + FLEET.length) % FLEET.length
+    if (planeMatches(FLEET[index], query)) {
+      void selectVehicle(index)
+      return
+    }
+  }
 }
 
 function swapPanelOpen() {
@@ -2500,8 +2620,12 @@ function setSwapPanelOpen(open) {
 function refreshSwapList() {
   const list = document.getElementById("swap-list")
   if (!list) return
+  const query = swapQuery.trim().toLowerCase()
   list.innerHTML = ""
+  let shown = 0
   FLEET.forEach((def, index) => {
+    if (!planeMatches(def, query)) return
+    shown += 1
     const button = document.createElement("button")
     button.type = "button"
     button.className = "swap-item"
@@ -2512,6 +2636,8 @@ function refreshSwapList() {
     })
     list.appendChild(button)
   })
+  const empty = document.getElementById("swap-empty")
+  if (empty) empty.hidden = shown > 0 || !query
   list.querySelector(".swap-item.active")?.scrollIntoView({ block: "nearest" })
 }
 
@@ -3326,6 +3452,7 @@ function resetToRunway(message) {
   }
   crashFx?.clear()
   velocity.set(0, 0, 0)
+  lastTrackYaw = null
   throttle = 0
   takeoffBoost = 0
   rotateWait = 0
@@ -3416,6 +3543,7 @@ function showMenu() {
   mode = "menu"
   hud.hidden = true
   menu.hidden = false
+  lastTrackYaw = null
   const settingsPage = document.getElementById("settings-page")
   if (settingsPage) settingsPage.hidden = true
   velocity.set(0, 0, 0)
@@ -3527,6 +3655,7 @@ function showCrashScreen(message) {
   crashPromptOpen = true
   recovering = true
   velocity.set(0, 0, 0)
+  lastTrackYaw = null
   crashTimer = 0
   crashSpin.set(0, 0, 0)
   throttle = 0
@@ -3822,6 +3951,7 @@ function refreshFlyActions() {
   if (cautions) cautions.hidden = playerIsCar()
   const apPanel = document.getElementById("ap-panel")
   if (apPanel) apPanel.hidden = playerIsCar() || outside || mode !== "fly"
+  refreshMousePanel()
 }
 
 function bindFlyActions() {
@@ -3838,6 +3968,11 @@ function bindFlyActions() {
     else if (action === "orbit") goOrbitView()
     else if (action === "chat") setChatOpen(!chatOpen())
     else if (action === "planes") setSwapPanelOpen(!swapPanelOpen())
+    else if (action === "mouse") {
+      const panel = document.getElementById("mouse-panel")
+      if (panel) panel.hidden = !panel.hidden
+      refreshMousePanel()
+    }
     else if (action === "jump") onJumpKey()
     else if (action === "reset") resetToRunway("Back on the runway.")
     else if (action === "mute") toggleMute()
@@ -3909,6 +4044,52 @@ function readStick() {
   // Full throttle clears a stuck parking brake so air drag can't lock a stall.
   if (throttle > 0.35 && systems.parking) systems.parking = false
   braking = held.brake > 0 || keys.has("Space") || !!systems.parking
+}
+
+/** Point the nose along the flight path and bank into the turn. */
+function tiltTowardTravel(dt) {
+  const speed = velocity.length()
+  if (grounded || speed < 9) {
+    lastTrackYaw = null
+    return
+  }
+  forward.set(0, 0, 1).applyQuaternion(player.root.quaternion)
+  const pathPitch = Math.asin(THREE.MathUtils.clamp(velocity.y / speed, -1, 1))
+  const nosePitch = Math.asin(THREE.MathUtils.clamp(forward.y, -1, 1))
+  // Ease off while the stick is leading so pitch and yaw still respond.
+  const pitchGain = Math.abs(stick.pitch) > 0.2 ? 1.1 : 3.6
+  const pitchStep = (pathPitch - nosePitch) * (1 - Math.exp(-dt * pitchGain))
+  // Negative local X raises the nose.
+  player.root.rotateX(-pitchStep)
+
+  forward.set(0, 0, 1).applyQuaternion(player.root.quaternion)
+  const noseYaw = Math.atan2(forward.x, forward.z)
+  const pathYaw = Math.atan2(velocity.x, velocity.z)
+  let yawErr = pathYaw - noseYaw
+  if (yawErr > Math.PI) yawErr -= Math.PI * 2
+  else if (yawErr < -Math.PI) yawErr += Math.PI * 2
+  const yawGain = Math.abs(stick.yaw) + Math.abs(stick.roll) > 0.2 ? 1.1 : 3.6
+  // Negative yaw turns toward +X, which is a right turn in this world.
+  player.root.rotateY(-yawErr * (1 - Math.exp(-dt * yawGain)))
+
+  let yawRate = 0
+  if (lastTrackYaw != null) {
+    let delta = pathYaw - lastTrackYaw
+    if (delta > Math.PI) delta -= Math.PI * 2
+    else if (delta < -Math.PI) delta += Math.PI * 2
+    yawRate = delta / Math.max(dt, 1 / 120)
+  }
+  lastTrackYaw = pathYaw
+
+  up.set(0, 1, 0).applyQuaternion(player.root.quaternion)
+  right.set(1, 0, 0).applyQuaternion(player.root.quaternion)
+  const bankRad = Math.atan2(right.y, up.y)
+  // Right turn (positive yaw rate) drops the right wing.
+  const wantBank = THREE.MathUtils.clamp(-yawRate * 0.9, -1.05, 1.05)
+  if (Math.abs(stick.roll) < 0.4) {
+    const bankErr = wantBank - bankRad
+    player.root.rotateZ(bankErr * (1 - Math.exp(-dt * 2.8)))
+  }
 }
 
 function stepFlight(dt) {
@@ -4050,9 +4231,10 @@ function stepFlight(dt) {
     }
   }
   if (!grounded && speed > 10) {
-    const align = stalling ? 0.85 : shearHit ? 0.7 : 1.5
-    const aimed = forward.clone().multiplyScalar(Math.max(8, velocity.length()))
-    velocity.lerp(aimed, 1 - Math.exp(-dt * align))
+    // Keep some of the real flight path so the nose can lean into it.
+    const align = stalling ? 0.35 : shearHit ? 0.3 : 0.55
+    trackDir.copy(forward).multiplyScalar(Math.max(8, velocity.length()))
+    velocity.lerp(trackDir, 1 - Math.exp(-dt * align))
   }
   if (!grounded && Math.abs(bankRad) > 0.2) {
     velocity.addScaledVector(right, Math.sin(bankRad) * speed * 0.35 * dt)
@@ -4067,6 +4249,18 @@ function stepFlight(dt) {
 
   const maxV = flight.cruise * 1.7 * (cheats.turbo ? 2 : 1)
   if (velocity.length() > maxV) velocity.multiplyScalar(maxV / velocity.length())
+
+  tiltTowardTravel(dt)
+  forward.set(0, 0, 1).applyQuaternion(player.root.quaternion)
+  up.set(0, 1, 0).applyQuaternion(player.root.quaternion)
+  right.set(1, 0, 0).applyQuaternion(player.root.quaternion)
+  const flownBank = Math.atan2(right.y, up.y)
+  flightInfo.bank = flownBank
+  if (!grounded && velocity.length() > 1.5) {
+    const pathPitchNow = Math.asin(THREE.MathUtils.clamp(velocity.y / velocity.length(), -1, 1))
+    const nosePitchNow = Math.asin(THREE.MathUtils.clamp(forward.y, -1, 1))
+    flightInfo.aoa = nosePitchNow - pathPitchNow
+  }
 
   const previousY = player.root.position.y
   player.root.position.addScaledVector(velocity, dt)
@@ -4141,7 +4335,7 @@ function stepFlight(dt) {
     toldRotate = true
     toast("Pull back to take off.")
   }
-  updateWarnings(dt, velocity.length(), stallSpeed, bankRad, aoa, player.root.position.y - clearance, weather.shear)
+  updateWarnings(dt, velocity.length(), stallSpeed, flownBank, flightInfo.aoa, player.root.position.y - clearance, weather.shear)
 }
 
 function attachLookForward(def, ahead = 50) {
@@ -4512,6 +4706,7 @@ function animate() {
   if (mode === "fly" && recovering && (crashTimer > 0 || crashPromptOpen)) {
     if (cheats.crashPhysics) stepCrashPhysics(dt)
   } else if (mode === "fly" && !recovering) {
+    if (!outside) decayMouseDrag(dt)
     if (outside) stepOutside(dt)
     else if (playerIsCar()) stepDrive(dt)
     else stepFlight(dt)
@@ -4657,6 +4852,7 @@ async function bootMenu() {
     list.appendChild(button)
     buttons.push(button)
   })
+  applyPlaneFilter()
 
   const parkedA = createAircraft(PLANES.find((plane) => plane.id === "a320"))
   const parkedB = createAircraft(PLANES.find((plane) => plane.id === "b737"))
@@ -4809,7 +5005,7 @@ function beginWithName(name, { multiplayer = false } = {}) {
   try { localStorage.setItem("tfs-player-name", playerName) } catch { /* ignore */ }
   document.getElementById("name-gate").hidden = true
   menu.hidden = false
-  world.setLocalAirport(0, playerName)
+  world.setLocalAirport(0, playerName, startAt)
   localOrigin = { ...world.localOrigin }
   if (player) place(player, PAD.x, PAD.z, 0.4)
   place(parked[0], PAD.x - 80, PAD.z + 250, 0.8)
@@ -4818,22 +5014,19 @@ function beginWithName(name, { multiplayer = false } = {}) {
   const hint = document.getElementById("join-hint")
   showChatUi()
   if (multiplayer) {
-    net.connect(playerName)
-    const onLoopback = location.hostname === "127.0.0.1" || location.hostname === "localhost"
+    net.connect(playerName, startAt)
     if (hint) {
       const host = location.host || `127.0.0.1:8765`
-      hint.textContent = onLoopback
+      hint.textContent = location.hostname === "127.0.0.1" || location.hostname === "localhost"
         ? "Hosting locally — share your Wi‑Fi LAN address with friends (see Terminal)."
         : `Joined via ${host}`
     }
-    toast(onLoopback
-      ? "Multiplayer on — friends on this Wi‑Fi can join."
-      : "Multiplayer on — share this page’s link so friends can join.")
+    toast(`Multiplayer on — starting at ${world.placeName}.`)
     appendChatLine({ text: "Chat is live — press T to talk.", system: true })
   } else {
     net.disconnect?.()
     if (hint) hint.textContent = "Singleplayer — you are flying alone."
-    toast("Singleplayer — flying alone.")
+    toast(`Singleplayer — starting at ${world.placeName}.`)
     appendChatLine({ text: "Singleplayer — choose Multiplayer next time to chat on Wi‑Fi.", system: true })
   }
 }
@@ -4843,12 +5036,21 @@ async function startApp() {
   boot.hidden = true
   const gate = document.getElementById("name-gate")
   const nameStep = document.getElementById("name-step")
+  const placeStep = document.getElementById("place-step")
   const modeStep = document.getElementById("mode-step")
+  const nameCard = document.querySelector(".name-card")
   gate.hidden = false
   nameStep.hidden = false
+  placeStep.hidden = true
   modeStep.hidden = true
   let saved = ""
   try { saved = localStorage.getItem("tfs-player-name") || "" } catch { /* ignore */ }
+  try {
+    const raw = JSON.parse(localStorage.getItem("tfs-start-place") || "")
+    if (raw && Number.isFinite(Number(raw.x)) && Number.isFinite(Number(raw.z))) {
+      startAt = spawnBeside(Number(raw.x), Number(raw.z))
+    }
+  } catch { /* ignore */ }
   const input = document.getElementById("player-name")
   input.value = saved || "Demi"
   input.focus()
@@ -4862,7 +5064,9 @@ async function startApp() {
     if (name.length < 2) {
       toast("Pick a name with at least 2 letters.")
       nameStep.hidden = false
+      placeStep.hidden = true
       modeStep.hidden = true
+      nameCard?.classList.remove("picking")
       input.focus()
       return
     }
@@ -4876,29 +5080,138 @@ async function startApp() {
       submitting = false
       gate.hidden = false
       nameStep.hidden = true
+      placeStep.hidden = true
       modeStep.hidden = false
+      nameCard?.classList.remove("picking")
       boot.hidden = true
       boot.textContent = error && error.message ? error.message : "The hangar could not open."
       console.error(error)
     }
   }
 
-  function showModeStep() {
+  function paintStartPin() {
+    const pin = document.getElementById("start-pin")
+    const label = document.getElementById("place-label")
+    const spanX = START_BOUNDS.maxX - START_BOUNDS.minX
+    const spanZ = START_BOUNDS.maxZ - START_BOUNDS.minZ
+    if (pin) {
+      pin.style.left = `${((startAt.x - START_BOUNDS.minX) / spanX) * 100}%`
+      pin.style.top = `${((startAt.z - START_BOUNDS.minZ) / spanZ) * 100}%`
+    }
+    if (label) label.textContent = `Starting at ${describePlace(startAt.x, startAt.z)}`
+    for (const btn of document.querySelectorAll(".start-place")) {
+      const dx = Number(btn.dataset.x) - startAt.x
+      const dz = Number(btn.dataset.z) - startAt.z
+      btn.classList.toggle("on", Math.hypot(dx, dz) < 400)
+    }
+  }
+
+  function chooseStart(x, z) {
+    startAt = spawnBeside(x, z)
+    try { localStorage.setItem("tfs-start-place", JSON.stringify(startAt)) } catch { /* ignore */ }
+    paintStartPin()
+  }
+
+  function buildStartMap() {
+    const map = document.getElementById("start-map")
+    const list = document.getElementById("start-places")
+    if (!map || map.dataset.ready === "1") return
+    map.dataset.ready = "1"
+    const spanX = START_BOUNDS.maxX - START_BOUNDS.minX
+    const spanZ = START_BOUNDS.maxZ - START_BOUNDS.minZ
+    for (const [x, z, r, color, label] of CONTINENTS) {
+      const land = document.createElement("div")
+      land.className = "start-land"
+      land.title = label
+      const w = (r * 2) / spanX
+      const h = (r * 2) / spanZ
+      const left = (x - START_BOUNDS.minX) / spanX
+      const top = (z - START_BOUNDS.minZ) / spanZ
+      land.style.left = `${(left - w / 2) * 100}%`
+      land.style.top = `${(top - h / 2) * 100}%`
+      land.style.width = `${w * 100}%`
+      land.style.height = `${h * 100}%`
+      land.style.background = `#${color.toString(16).padStart(6, "0")}`
+      map.appendChild(land)
+    }
+    const pin = document.createElement("div")
+    pin.id = "start-pin"
+    pin.className = "start-pin"
+    map.appendChild(pin)
+    map.addEventListener("pointerdown", (event) => {
+      const rect = map.getBoundingClientRect()
+      const u = (event.clientX - rect.left) / rect.width
+      const v = (event.clientY - rect.top) / rect.height
+      chooseStart(START_BOUNDS.minX + u * spanX, START_BOUNDS.minZ + v * spanZ)
+    })
+    const places = [
+      { name: "Home field", x: 0, z: 0 },
+      ...WORLD_AIRPORTS.map(([x, z, name]) => {
+        const spot = spawnBeside(x, z)
+        return { name: prettyPlace(name), x: spot.x, z: spot.z }
+      }),
+    ]
+    for (const place of places) {
+      const btn = document.createElement("button")
+      btn.type = "button"
+      btn.className = "start-place"
+      btn.textContent = place.name
+      btn.dataset.x = String(place.x)
+      btn.dataset.z = String(place.z)
+      btn.addEventListener("click", () => chooseStart(place.x, place.z))
+      list?.appendChild(btn)
+    }
+  }
+
+  function showPlaceStep() {
     const name = sanitizeName(input.value)
     if (name.length < 2) {
       toast("Pick a name with at least 2 letters.")
       return
     }
     pendingName = name
+    buildStartMap()
+    paintStartPin()
     nameStep.hidden = true
+    placeStep.hidden = false
+    modeStep.hidden = true
+    nameCard?.classList.add("picking")
+  }
+
+  function showModeStep() {
+    const name = sanitizeName(pendingName || input.value)
+    if (name.length < 2) {
+      toast("Pick a name with at least 2 letters.")
+      return
+    }
+    pendingName = name
+    nameStep.hidden = true
+    placeStep.hidden = true
     modeStep.hidden = false
+    nameCard?.classList.remove("picking")
+    const hint = document.getElementById("join-hint")
+    if (hint && (location.hostname === "127.0.0.1" || location.hostname === "localhost")) {
+      hint.textContent = "Finding this computer’s Wi‑Fi address for the iPad…"
+      fetch("/lan.json").then((res) => res.json()).then((data) => {
+        const url = data.urls?.[0]
+        hint.textContent = url
+          ? `On the iPad, open ${url} — same Wi‑Fi. If that page says offline, allow this computer through the firewall.`
+          : "Connect this computer to Wi‑Fi, then the iPad can open the LAN address."
+      }).catch(() => {
+        hint.textContent = "Singleplayer works on this device even when multiplayer is offline."
+      })
+    }
     document.getElementById("mode-single")?.focus()
   }
 
   document.getElementById("name-form").addEventListener("submit", (event) => {
     event.preventDefault()
     if (submitting || hangarReady) return
-    if (!modeStep.hidden) return
+    if (!nameStep.hidden) showPlaceStep()
+    else if (!placeStep.hidden) showModeStep()
+  })
+  document.getElementById("place-go")?.addEventListener("click", () => {
+    if (submitting || hangarReady) return
     showModeStep()
   })
   document.getElementById("mode-single")?.addEventListener("click", () => enterHangar(false))
@@ -4917,6 +5230,36 @@ async function startApp() {
     }
   })
 }
+
+document.getElementById("plane-search")?.addEventListener("input", (event) => {
+  planeQuery = event.target.value || ""
+  applyPlaneFilter()
+})
+document.getElementById("swap-search")?.addEventListener("input", (event) => {
+  swapQuery = event.target.value || ""
+  refreshSwapList()
+})
+document.getElementById("mouse-panel")?.addEventListener("click", (event) => {
+  const modeBtn = event.target.closest("[data-mouse]")
+  if (!modeBtn) return
+  mousePrefs.mode = modeBtn.dataset.mouse
+  clearMouseStick()
+  saveMousePrefs()
+  refreshMousePanel()
+  const label = mousePrefs.mode === "drag" ? "Drag the mouse to steer" : mousePrefs.mode === "off" ? "Mouse steering off" : "Cursor steers the plane"
+  toast(label)
+})
+document.getElementById("mouse-invert")?.addEventListener("click", () => {
+  mousePrefs.invert = !mousePrefs.invert
+  saveMousePrefs()
+  refreshMousePanel()
+  toast(mousePrefs.invert ? "Mouse pitch inverted" : "Mouse pitch normal")
+})
+document.getElementById("mouse-sens")?.addEventListener("input", (event) => {
+  mousePrefs.sens = THREE.MathUtils.clamp(Number(event.target.value) || 1, 0.4, 2.2)
+  saveMousePrefs()
+})
+refreshMousePanel()
 
 startApp().catch((error) => {
   boot.hidden = false

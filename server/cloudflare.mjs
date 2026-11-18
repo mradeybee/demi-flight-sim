@@ -4,11 +4,24 @@
  */
 import { DurableObject } from "cloudflare:workers"
 import {
+  PAD_LOCAL,
   slotOrigin,
-  padForSlot,
   sanitizeName,
   airportLabel,
 } from "../js/airportSlots.js"
+
+function sanitizeOrigin(x, z) {
+  const nx = Number(x)
+  const nz = Number(z)
+  if (!Number.isFinite(nx) || !Number.isFinite(nz)) return null
+  const limit = 88000
+  const dist = Math.hypot(nx, nz)
+  if (dist > limit) {
+    const scale = limit / dist
+    return { x: Math.round(nx * scale), z: Math.round(nz * scale) }
+  }
+  return { x: Math.round(nx), z: Math.round(nz) }
+}
 
 function sanitizeChat(raw) {
   return String(raw || "")
@@ -19,12 +32,13 @@ function sanitizeChat(raw) {
 }
 
 function publicPlayer(p) {
+  const place = p.place || slotOrigin(p.slot)
   return {
     id: p.id,
     name: p.name,
     slot: p.slot,
-    origin: slotOrigin(p.slot),
-    pad: padForSlot(p.slot),
+    origin: place,
+    pad: { x: place.x + PAD_LOCAL.x, z: place.z + PAD_LOCAL.z },
     label: airportLabel(p.name),
     state: p.state || null,
   }
@@ -177,6 +191,7 @@ export class FlightRoom extends DurableObject {
       state: null,
       lastChatAt: 0,
       origin: prior?.origin || "",
+      place: sanitizeOrigin(msg.x, msg.z) || slotOrigin(slot),
     }
     ws.serializeAttachment(me)
     const you = publicPlayer(me)

@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <title>Turbo Flight Sim 0.1</title>
-  <link rel="stylesheet" href="css/style.css?v=165" />
+  <link rel="stylesheet" href="css/style.css?v=169" />
 </head>
 <body>
   <canvas id="view"></canvas>
@@ -15,16 +15,25 @@
       <div id="name-step">
         <p class="eyebrow">Turbo Flight Sim</p>
         <h1>What’s your name?</h1>
-        <p>We’ll name your airport after you.</p>
+        <p>We’ll name your airport after you. Next, pick where it sits.</p>
         <label class="name-label">Pilot name
           <input id="player-name" type="text" maxlength="16" minlength="2" autocomplete="nickname" placeholder="Demi" required />
         </label>
         <button id="name-go" type="submit">Continue</button>
       </div>
+      <div id="place-step" hidden>
+        <p class="eyebrow">Where do you want to start?</p>
+        <h1>Pick a place</h1>
+        <p>Tap the map anywhere, or choose a city. Your airport is built there.</p>
+        <div id="start-map" class="start-map" role="application" aria-label="World map"></div>
+        <p id="place-label">Starting at North America</p>
+        <div id="start-places" class="start-places"></div>
+        <button id="place-go" type="button">Continue</button>
+      </div>
       <div id="mode-step" hidden>
         <p class="eyebrow">How do you want to play?</p>
         <h1>Pick a mode</h1>
-        <p>Press <kbd>S</kbd> for singleplayer or <kbd>M</kbd> for multiplayer.</p>
+        <p>Press <kbd>S</kbd> for singleplayer or <kbd>M</kbd> for multiplayer. An iPad can still fly alone if Wi‑Fi multiplayer is offline.</p>
         <div class="mode-actions">
           <button id="mode-single" type="button" class="mode-btn">
             <kbd>S</kbd>
@@ -51,6 +60,10 @@
       <div id="players-online" class="players-online" aria-live="polite"></div>
       <p id="traffic-hangar" class="traffic-hangar" aria-live="polite"></p>
     </header>
+    <label class="plane-search">Search planes
+      <input id="plane-search" type="search" placeholder="Name, role, or group" autocomplete="off" spellcheck="false" />
+    </label>
+    <p id="plane-empty" class="plane-empty" hidden>No planes match that search.</p>
     <div id="menu-list"></div>
     <footer class="dock">
       <p class="role" id="plane-role"></p>
@@ -206,6 +219,7 @@
       <button type="button" data-fly="orbit" title="Orbit view">Orbit</button>
       <button type="button" data-fly="chat" id="fly-chat" title="Open chat">Chat</button>
       <button type="button" data-fly="planes" id="fly-planes" title="Change aircraft">Planes</button>
+      <button type="button" data-fly="mouse" id="fly-mouse" title="Change how the mouse flies">Mouse</button>
       <button type="button" data-fly="jump" id="fly-jump" title="Double-tap to jump out or board">Jump</button>
       <button type="button" data-fly="reset" title="Reset to runway">Reset</button>
       <button type="button" data-fly="mute" id="mute-btn" title="Toggle sound">Sound on</button>
@@ -220,6 +234,19 @@
         <button type="button" data-hold="brake" data-value="1">Brake</button>
         <button type="button" data-hold="yaw" data-value="1">Nose right</button>
       </div>
+    </div>
+    <div id="mouse-panel" aria-label="Mouse controls" hidden>
+      <div class="ap-title">Mouse</div>
+      <p id="mouse-read" class="mouse-read">Cursor steers</p>
+      <div class="mouse-modes">
+        <button type="button" data-mouse="aim">Aim</button>
+        <button type="button" data-mouse="drag">Drag</button>
+        <button type="button" data-mouse="off">Off</button>
+      </div>
+      <label class="mouse-sens">Feel
+        <input id="mouse-sens" type="range" min="0.4" max="2.2" step="0.1" value="1" />
+      </label>
+      <button type="button" id="mouse-invert">Invert off</button>
     </div>
     <div id="hints"></div>
     <div id="fail-dock" aria-label="Failures and chat">
@@ -260,6 +287,8 @@
         <button type="button" id="swap-close">Close</button>
       </div>
       <p class="swap-blurb">Pick a new plane without landing — you keep your place in the sky.</p>
+      <input id="swap-search" class="swap-search" type="search" placeholder="Search planes" autocomplete="off" spellcheck="false" />
+      <p id="swap-empty" class="swap-empty" hidden>No planes match.</p>
       <div id="swap-list"></div>
     </div>
   </div>
@@ -357,6 +386,6 @@
     }
   }
   </script>
-  <script type="module" src="js/main.js?v=165"></script>
+  <script type="module" src="js/main.js?v=171"></script>
 </body>
 </html>

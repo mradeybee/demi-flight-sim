@@ -1,12 +1,25 @@
-/** WebSocket client for Turbo Flight Sim multiplayer (local host or Cloudflare). */
+/** LAN WebSocket client for Turbo Flight Sim multiplayer. */
 
 export function createNet({ onWelcome, onPeerJoin, onPeerLeave, onPeerState, onPeerUpdate, onChat, onStatus }) {
   let ws = null
   let you = null
   let peers = new Map()
   let closed = false
+  let opened = false
+  let gaveUp = false
   let retryTimer = null
   let playerName = "Pilot"
+  let startOrigin = null
+
+  function giveUp(reason) {
+    if (gaveUp || opened) return
+    gaveUp = true
+    closed = true
+    clearTimeout(retryTimer)
+    try { ws?.close() } catch { /* already closed */ }
+    status("Multiplayer is offline — you can still fly alone.", "warn")
+    onWelcome?.({ you: null, peers: [], offline: true, error: reason || "offline" })
+  }
 
   function status(text, kind = "info") {
     onStatus?.(text, kind)
@@ -52,35 +65,52 @@ export function createNet({ onWelcome, onPeerJoin, onPeerLeave, onPeerState, onP
     }
   }
 
-  function connect(name) {
+  function connect(name, origin) {
     playerName = name
+    if (origin && Number.isFinite(Number(origin.x)) && Number.isFinite(Number(origin.z))) {
+      startOrigin = { x: Number(origin.x), z: Number(origin.z) }
+    }
     closed = false
+    gaveUp = false
     const proto = location.protocol === "https:" ? "wss" : "ws"
     const url = `${proto}://${location.host}/ws`
     status("Connecting to multiplayer…")
     try {
       ws = new WebSocket(url)
     } catch (err) {
-      status("Multiplayer unavailable — flying offline.", "warn")
-      onWelcome?.({ you: null, peers: [], offline: true, error: String(err) })
+      giveUp(String(err))
       return
     }
-    ws.addEventListener("open", () => {
-      ws.send(JSON.stringify({ type: "join", name: playerName }))
+    const socket = ws
+    socket.addEventListener("open", () => {
+      if (socket !== ws) return
+      opened = true
+      socket.send(JSON.stringify({
+        type: "join",
+        name: playerName,
+        x: startOrigin?.x,
+        z: startOrigin?.z,
+      }))
     })
-    ws.addEventListener("message", (ev) => {
+    socket.addEventListener("message", (ev) => {
+      if (socket !== ws) return
       try {
         handle(JSON.parse(ev.data))
       } catch { /* ignore */ }
     })
-    ws.addEventListener("close", () => {
-      if (closed) return
+    socket.addEventListener("close", () => {
+      if (socket !== ws || closed) return
+      if (!opened) {
+        giveUp("closed")
+        return
+      }
       status("Disconnected — retrying…", "warn")
       clearTimeout(retryTimer)
       retryTimer = setTimeout(() => connect(playerName), 2000)
     })
-    ws.addEventListener("error", () => {
-      // close handler retries
+    socket.addEventListener("error", () => {
+      if (socket !== ws || opened) return
+      giveUp("error")
     })
   }
 
